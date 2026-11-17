@@ -1,6 +1,6 @@
 /* Fliper Web Sim — flipper-fs: virtual SD card for the simulated Flipper.
    Single source of truth for ALL file data on both devices (the phone
-   reaches it only through RPC in Stage 4 — never directly).
+   reaches it only through RPC in the companion — never directly).
 
    - Paths are POSIX-style absolute strings; the card root is "/", all
      mutable content lives under "/ext" (Flipper convention).
@@ -11,15 +11,14 @@
      binaries, no network, no real SD card.
    - Every mutation produces an op record {op, path, to?, data?, mtime}
      and notifies subscribers with (op, source) where source is 'local'
-     or 'remote'. Stage 4 ships these ops over the link bus so rename /
-     capture / delete propagate to the other UI within ~1 s; apply(op,
-     'remote') replays them without echo. */
+     or 'remote'. The OS ships these ops over the link bus so rename /
+     capture / delete propagate to the other UI within ~1 s. There is only one SD tree. */
 (function () {
   'use strict';
   var FZ = window.FZ;
 
-  var STORAGE_KEY = 'fs';       /* → fz.v1.fs */
-  var MUT_ROOT = '/ext';        /* mutations must stay under this path */
+  var STORAGE_KEY = 'fs'; /* → fz.v1.fs */
+  var MUT_ROOT = '/ext'; /* mutations must stay under this path */
   var root = null;
   var loaded = false;
   var subs = [];
@@ -40,8 +39,12 @@
     var out = [];
     for (var i = 0; i < parts.length; i++) {
       var seg = parts[i];
+      if (seg === '__proto__' || seg === 'constructor' || seg === 'prototype') return '/invalid';
       if (!seg || seg === '.') continue;
-      if (seg === '..') { out.pop(); continue; }
+      if (seg === '..') {
+        out.pop();
+        continue;
+      }
       out.push(seg);
     }
     return '/' + out.join('/');
@@ -58,6 +61,7 @@
     for (var i = 0; i < parts.length; i++) {
       if (!parts[i]) continue;
       if (!cur.dir || !cur.children) return null;
+      if (!Object.prototype.hasOwnProperty.call(cur.children, parts[i])) return null;
       cur = cur.children[parts[i]];
       if (!cur) return null;
     }
@@ -80,12 +84,16 @@
 
   /* ---------- persistence / events ---------- */
   function persist() {
-    try { FZ.storage.set(STORAGE_KEY, { v: 1, root: root }); } catch (e) {}
+    try {
+      FZ.storage.set(STORAGE_KEY, { v: 1, root: root });
+    } catch (e) {}
   }
 
   function emit(op, source) {
     for (var i = 0; i < subs.length; i++) {
-      try { subs[i](op, source || 'local'); } catch (e) {}
+      try {
+        subs[i](op, source || 'local');
+      } catch (e) {}
     }
   }
 
@@ -96,10 +104,17 @@
 
   function load() {
     var raw = null;
-    try { raw = FZ.storage.get(STORAGE_KEY, null); } catch (e) { raw = null; }
+    try {
+      raw = FZ.storage.get(STORAGE_KEY, null);
+    } catch (e) {
+      raw = null;
+    }
     if (raw && raw.v === 1 && raw.root && raw.root.dir && raw.root.children) {
-      root = raw.root;
-      return;
+      try {
+        FZ.fs.validate(raw.root);
+        root = raw.root;
+        return;
+      } catch (e) {}
     }
     root = seed();
     persist();
@@ -123,96 +138,38 @@
       return n;
     }
 
-    file(ext, 'README.txt', [
-      'VIRTUAL SD CARD',
-      'FLIPPER WEB SIM',
-      '',
-      'Files live in your',
-      'browser localStorage',
-      'under key fz.v1.fs.',
-      '',
-      'No real hardware.',
-      'Radio operations are',
-      'simulated; no RF.',
-      '',
-      'MENU (press OK):',
-      '- FILE MANAGER: view,',
-      '  rename, delete files',
-      '- SCREENSHOT: saves',
-      '  the LCD image to',
-      '  /ext/screenshots',
-      '- STORAGE: space used'
+    [
+      'subghz',
+      'lfrfid',
+      'nfc',
+      'infrared',
+      'gpio',
+      'ibutton',
+      'badusb',
+      'u2f',
+      'screenshots'
+    ].forEach(function (k) {
+      dir(ext, k);
+    });
+    file(ext, 'welcome.txt', [
+      'FLIPPER LAB / FIELD NOTES',
+      'This is a virtual card.',
+      'Press OK for tools.',
+      'Down from home: Archive.',
+      'Radio operations are simulated; no real RF.'
     ]);
-
-    var apps = dir(ext, 'apps');
-    var games = dir(apps, 'games');
-    file(games, 'tictactoe.fap', [
-      'PLACEHOLDER APP FILE',
-      '(simulated; not a',
-      'real application)',
-      '',
-      'No executable code',
-      'lives here. This file',
-      'exists so the file',
-      'manager has something',
-      'to open and rename.'
+    file(ext.children.badusb, 'hello.txt', [
+      'A note from the lab',
+      'Hello, little dolphin.',
+      'This is an LCD animation.',
+      'No keys leave this screen.'
     ]);
-
-    var sub = dir(ext, 'subghz');
-    file(sub, 'demo_433.sub', [
-      'Simulated sub-GHz',
-      'demo (invented data,',
-      'not a real capture)',
-      '',
-      'freq: 433920000 Hz',
-      'mod: OOK',
-      'preset: demo',
-      'note: fan sim only'
+    file(ext.children.badusb, 'journal.txt', [
+      'FIELD JOURNAL',
+      'Desk check: complete',
+      'Link check: standby',
+      'End of entry.'
     ]);
-
-    var nfc = dir(ext, 'nfc');
-    file(nfc, 'demo.nfc', [
-      'Simulated NFC record',
-      '(invented data)',
-      '',
-      'uid: 04a1b2c3d4e5',
-      'type: iso14443-a',
-      'data: 01020304',
-      'note: fan sim only'
-    ]);
-
-    dir(ext, 'ibtn'); /* empty on purpose — shows the EMPTY folder path */
-
-    var dol = dir(ext, 'dolphin');
-    file(dol, 'level.txt', [
-      'Dolphin level: 42',
-      'XP: 1200 / 2000',
-      '(stats invented)'
-    ]);
-
-    dir(ext, 'screenshots'); /* captures land here */
-
-    var badusb = dir(ext, 'badusb');
-    file(badusb, 'demo_hello.txt', [
-      'REM Flipper Web Sim demo',
-      'REM This never touches your OS',
-      'STRING Hello from Flipper Sim',
-      'ENTER',
-      'DELAY 500',
-      'STRING Simulated BadUSB only',
-      'ENTER',
-      'REM End of demo'
-    ]);
-    file(badusb, 'demo_note.txt', [
-      'REM Simulated keyboard demo',
-      'STRING This is a simulated',
-      'ENTER',
-      'STRING BadUSB playback',
-      'ENTER',
-      'DELAY 300',
-      'REM No keys leave this page'
-    ]);
-
     return r;
   }
 
@@ -236,7 +193,9 @@
     for (var i = 0; i < parts.length; i++) {
       if (!parts[i]) continue;
       if (!cur.dir) return false;
-      var next = cur.children[parts[i]];
+      var next = Object.prototype.hasOwnProperty.call(cur.children, parts[i])
+        ? cur.children[parts[i]]
+        : null;
       if (!next) {
         next = makeNode(true);
         cur.children[parts[i]] = next;
@@ -256,7 +215,9 @@
     var parent = resolve(parentPath);
     var name = np.slice(idx + 1);
     if (!parent || !name) return null;
-    var existing = parent.children[name];
+    var existing = Object.prototype.hasOwnProperty.call(parent.children, name)
+      ? parent.children[name]
+      : null;
     if (existing && existing.dir) return null;
     var n = existing || makeNode(false);
     n.dir = false;
@@ -311,6 +272,54 @@
       return this;
     },
 
+    snapshot: function () {
+      return JSON.parse(JSON.stringify(root));
+    },
+    validate: function (tree) {
+      var count = 0,
+        bytes = 0;
+      function visit(n, depth) {
+        if (
+          !n ||
+          typeof n !== 'object' ||
+          typeof n.dir !== 'boolean' ||
+          ++count > 4096 ||
+          depth > 24
+        )
+          throw Error('Invalid SD tree');
+        if (n.dir) {
+          if (!n.children || typeof n.children !== 'object' || Array.isArray(n.children))
+            throw Error('Invalid folder');
+          Object.keys(n.children).forEach(function (k) {
+            if (
+              !k ||
+              k.length > 64 ||
+              /[\/\x00-\x1f]/.test(k) ||
+              ['.', '..', '__proto__', 'constructor', 'prototype'].indexOf(k) >= 0
+            )
+              throw Error('Invalid filename');
+            visit(n.children[k], depth + 1);
+          });
+        } else if (typeof n.data !== 'string' || (bytes += n.data.length) > 3000000)
+          throw Error('Invalid or oversized file data');
+      }
+      visit(tree, 0);
+      if (
+        !tree.dir ||
+        Object.keys(tree.children).length !== 1 ||
+        !tree.children.ext ||
+        !tree.children.ext.dir
+      )
+        throw Error('Expected /ext root');
+      return true;
+    },
+    restore: function (tree) {
+      this.validate(tree);
+      root = JSON.parse(JSON.stringify(tree));
+      loaded = true;
+      persist();
+      emit({ op: 'restore', path: '/ext' }, 'local');
+    },
     reset: function () {
       root = seed();
       loaded = true;
@@ -321,9 +330,13 @@
 
     normalize: normalize,
 
-    resolve: function (p) { return resolve(p); },
+    resolve: function (p) {
+      return resolve(p);
+    },
 
-    exists: function (p) { return !!resolve(p); },
+    exists: function (p) {
+      return !!resolve(p);
+    },
 
     stat: function (p) {
       var np = normalize(p);
@@ -375,7 +388,10 @@
       var path = mutWrite(np, data);
       if (!path) return null;
       var st = FZ.fs.stat(path);
-      commit({ op: 'write', path: path, data: String(data), mtime: st ? st.mtime : Date.now() }, 'local');
+      commit(
+        { op: 'write', path: path, data: String(data), mtime: st ? st.mtime : Date.now() },
+        'local'
+      );
       return path;
     },
 
@@ -403,8 +419,15 @@
       var rp = resolveParent(p);
       if (!rp || !Object.prototype.hasOwnProperty.call(rp.parent.children, rp.name)) return null;
       newName = String(newName === null || newName === undefined ? '' : newName);
-      if (!newName || newName === '.' || newName === '..' ||
-          newName.indexOf('/') >= 0 || newName.length > 64) return null;
+      if (
+        !newName ||
+        newName === '.' ||
+        newName === '..' ||
+        ['constructor', '__proto__', 'prototype'].indexOf(newName) >= 0 ||
+        newName.indexOf('/') >= 0 ||
+        newName.length > 64
+      )
+        return null;
       if (newName === rp.name) return rp.path;
       var to = joinPath(rp.parentPath, newName);
       var path = mutMove(rp.path, to);
@@ -418,7 +441,7 @@
       FZ.fs.init();
       var bytes = 0;
       walk(root, '/', function (path, node) {
-        if (node.dir) bytes += 32;               /* directory entry */
+        if (node.dir) bytes += 32; /* directory entry */
         else bytes += String(node.data || '').length;
       });
       return bytes;
@@ -430,26 +453,13 @@
 
     stats: function () {
       FZ.fs.init();
-      var files = 0, dirs = 0;
+      var files = 0,
+        dirs = 0;
       walk(root, '/', function (path, node) {
-        if (node.dir) dirs++; else files++;
+        if (node.dir) dirs++;
+        else files++;
       });
       return { files: files, dirs: dirs };
-    },
-
-    /* Replay an op produced elsewhere (Stage 4: over the link bus).
-       source defaults to 'remote' so listeners can avoid echoing. */
-    apply: function (op, source) {
-      if (!op || !op.op || op.op === 'reset') return false;
-      FZ.fs.init();
-      var path = null;
-      if (op.op === 'write') path = mutWrite(normalize(op.path), op.data);
-      else if (op.op === 'mkdir') path = mutMkdir(normalize(op.path));
-      else if (op.op === 'remove') path = mutRemove(normalize(op.path));
-      else if (op.op === 'move') path = mutMove(normalize(op.path), normalize(op.to));
-      if (!path) return false;
-      commit(op, source || 'remote');
-      return true;
     },
 
     subscribe: function (fn) {
