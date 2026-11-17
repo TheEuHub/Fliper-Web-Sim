@@ -3,7 +3,7 @@
   'use strict';
 
   var FZ = window.FZ = window.FZ || {};
-  FZ.VERSION = '0.3.0-s4';
+  FZ.VERSION = '0.4.0-s5';
 
   /* ---------- flags ---------- */
   var reduced = false;

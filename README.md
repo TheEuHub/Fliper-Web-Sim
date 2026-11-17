@@ -9,11 +9,11 @@ link (an in-page RPC bus).
 **Simulation only.** No real radio, NFC, USB or firmware anywhere. Not
 affiliated with Flipper Devices.
 
-> Status: **Stage 4** — everything in Stage 3 plus a **phone Storage screen**
-> that mirrors the virtual SD card entirely over the simulated RPC bus
-> (`fs.list` / `fs.read` / `fs.rename` / `fs.remove`), a push `fs.changed`
-> event so edits made on either device show up on the other within about a
-> second, and a **Find My Flipper** button that flashes the Flipper's LCD.
+> Status: **Stage 5** — everything in Stage 3–4 plus a **Bad USB** menu item
+> that is strictly **UI-only**: it plays back tiny, original, benign demo
+> scripts as text animation on the Flipper's own LCD. It never creates a
+> keyboard/HID device, never dispatches DOM/keyboard events, and cannot type
+> into this page or any other application — see "Bad USB" below.
 
 ## Self-contained: zero external dependencies
 
@@ -116,12 +116,30 @@ OPTIONAL section).
   entire LCD "FIND MY FLIPPER / HERE I AM" (inverted, ~4.5 Hz) for 3 seconds,
   then returns to whatever screen it was on.
 
-### Later stages
+### Bad USB — UI-only (Stage 5, shipped)
 
-- **S5 — Bad USB (UI-only)**: line-by-line playback of benign demo scripts on
-  the Flipper screen; never injects into the host OS — not yet added.
-- **S6 — polish & self-test**: `FZ.selfTest()`, final README pass, perf tuning
-  — not yet added.
+- **What it is**: a menu item that reads tiny, original, invented scripts
+  from `/ext/badusb` (plain `REM` / `STRING` / `ENTER` / `DELAY` lines — the
+  same four instructions real Bad USB "Ducky Script" uses, reimplemented
+  from scratch) and plays them back as a **terminal-style text animation on
+  the Flipper's LCD**, character by character.
+- **What it is not**: at no point does this code create a keyboard/HID
+  device, call the WebHID/WebUSB/WebSerial APIs, dispatch a `KeyboardEvent`,
+  call `document.execCommand`, or touch the clipboard. It cannot type into
+  this page, a different tab, or any other application — there's a one-line
+  source audit in the test harness plus a permanent on-screen reminder
+  ("SIMULATED — NO HID OUT") the whole time a script is "running".
+- **On the Flipper**: open the menu → **BAD USB** → ↑/↓ pick a script → **OK**
+  to run it. While it plays, **OK** fast-forwards the current line and
+  **Back** stops immediately; when it finishes, **Back** returns to the list.
+- Two demo scripts ship in the seed filesystem: `demo_hello.txt` and
+  `demo_note.txt` — both harmless placeholder text, nothing resembling a
+  real payload.
+
+## Later stages
+
+- **S6 — polish & self-test**: `FZ.selfTest()`, final README pass, perf
+  tuning — not yet added.
 
 ## Controls
 
@@ -138,6 +156,7 @@ OPTIONAL section).
 | Tap phone screen | Use the companion app |
 | Phone "Open Storage" (while connected) | Browse the same SD card over RPC, rename/delete, view files |
 | Phone "Find My Flipper" (while connected) | Flashes the Flipper's LCD for ~3 s |
+| Flipper menu → BAD USB | Pick a demo script, OK to play it on the LCD (OK = skip step, Back = stop) |
 | Phone side buttons | Power = sleep/wake screen, volume = app volume |
 | Top bar | Layout toggle, Models, Help, Sound, Reset storage, Link debug |
 

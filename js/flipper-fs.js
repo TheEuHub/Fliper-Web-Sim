@@ -191,6 +191,28 @@
     ]);
 
     dir(ext, 'screenshots'); /* captures land here */
+
+    var badusb = dir(ext, 'badusb');
+    file(badusb, 'demo_hello.txt', [
+      'REM Flipper Web Sim demo',
+      'REM This never touches your OS',
+      'STRING Hello from Flipper Sim',
+      'ENTER',
+      'DELAY 500',
+      'STRING Simulated BadUSB only',
+      'ENTER',
+      'REM End of demo'
+    ]);
+    file(badusb, 'demo_note.txt', [
+      'REM Simulated keyboard demo',
+      'STRING This is a simulated',
+      'ENTER',
+      'STRING BadUSB playback',
+      'ENTER',
+      'DELAY 300',
+      'REM No keys leave this page'
+    ]);
+
     return r;
   }
 

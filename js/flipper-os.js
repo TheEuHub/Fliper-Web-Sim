@@ -5,6 +5,11 @@
    Stage 3: main menu (OK from home/connected) with FILE MANAGER over the
    virtual SD card (js/flipper-fs.js): browse, view text/images, rename,
    delete, LCD screenshot capture, storage info.
+   Stage 5: BAD USB is UI-only. It reads tiny original "REM/STRING/ENTER/
+   DELAY" demo scripts from /ext/badusb and plays them back as text on the
+   Flipper's own LCD — it never creates a real keyboard/HID device, never
+   dispatches DOM events, and cannot type into this page or any other
+   application. It is a screen animation, nothing else.
    Flipper state lives HERE (single source of truth). The phone talks to it
    only through the RPC bus in link.js. */
 (function () {
@@ -186,6 +191,10 @@
     savedPath: '',
     savedT0: 0,
     findT0: -1e9,   /* Stage 4: find-my-Flipper flash start time */
+
+    /* Bad USB (Stage 5, UI-only) */
+    badusb: { list: [], sel: 0, scroll: 0 },
+    run: null,      /* {name, steps[], idx, log[], mode, charIdx, t0, delayUntil, done} */
     fm: {
       path: '/ext', sel: 0, scroll: 0,
       viewPath: null, viewLines: [], viewScroll: 0, viewImg: null, viewIsImg: false,
@@ -358,6 +367,8 @@
         case 'fmdel': this.keyFmDel(k); break;
         case 'fmsaved': this.state = 'menu'; this.menuSel = 0; break;
         case 'storage': if (k === 'back') { this.state = 'menu'; } break;
+        case 'badusb': this.keyBadUsb(k); break;
+        case 'badusbrun': this.keyBadUsbRun(k); break;
         default: break;
       }
       this.dirty();
@@ -365,13 +376,123 @@
 
     /* ---------- menu / file-manager input (Stage 3) ---------- */
     keyMenu: function (k) {
-      if (k === 'up') this.menuSel = (this.menuSel + 2) % 3;
-      else if (k === 'down') this.menuSel = (this.menuSel + 1) % 3;
+      var N = 4;
+      if (k === 'up') this.menuSel = (this.menuSel + N - 1) % N;
+      else if (k === 'down') this.menuSel = (this.menuSel + 1) % N;
       else if (k === 'back') this.state = this.menuFrom;
       else if (k === 'ok') {
         if (this.menuSel === 0) { this.openFm('/ext'); this.state = 'fm'; }
         else if (this.menuSel === 1) this.capture();
-        else this.state = 'storage';
+        else if (this.menuSel === 2) this.state = 'storage';
+        else this.openBadUsb();
+      }
+    },
+
+    /* ---------- Bad USB: UI-only script playback (Stage 5) ---------- */
+    openBadUsb: function () {
+      var entries = FZ.fs ? FZ.fs.list('/ext/badusb') : [];
+      this.badusb.list = entries.filter(function (e) { return !e.dir; });
+      this.badusb.sel = 0;
+      this.badusb.scroll = 0;
+      this.state = 'badusb';
+    },
+
+    keyBadUsb: function (k) {
+      var b = this.badusb, n = b.list.length;
+      if (k === 'up') { if (b.sel > 0) b.sel--; }
+      else if (k === 'down') { if (b.sel < n - 1) b.sel++; }
+      else if (k === 'back') { this.state = 'menu'; this.menuSel = 3; }
+      else if (k === 'ok') { if (b.list[b.sel]) this.startBadUsb(b.list[b.sel]); }
+      if (b.sel < b.scroll) b.scroll = b.sel;
+      if (b.sel > b.scroll + 5) b.scroll = b.sel - 5;
+    },
+
+    /* Parse a tiny original script format: one instruction per line.
+         REM <text>      comment, shown but never "typed"
+         STRING <text>   types the text out on the LCD, character by character
+         ENTER           shows a return glyph and starts a new output line
+         DELAY <ms>      pauses, showing a countdown
+       Anything else is shown verbatim as a comment-like line. This is a
+       screen animation only — no key events are ever dispatched anywhere. */
+    parseBadUsb: function (text) {
+      var lines = String(text).split('\n');
+      var steps = [];
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var trimmed = line.replace(/^\s+/, '');
+        if (!trimmed) continue;
+        var sp = trimmed.indexOf(' ');
+        var word = sp < 0 ? trimmed : trimmed.slice(0, sp);
+        var rest = sp < 0 ? '' : trimmed.slice(sp + 1);
+        var up = word.toUpperCase();
+        if (up === 'REM') steps.push({ type: 'rem', text: rest });
+        else if (up === 'STRING') steps.push({ type: 'string', text: rest });
+        else if (up === 'ENTER') steps.push({ type: 'enter', text: '' });
+        else if (up === 'DELAY') steps.push({ type: 'delay', ms: Math.max(0, parseInt(rest, 10) || 0) });
+        else steps.push({ type: 'rem', text: trimmed });
+      }
+      return steps;
+    },
+
+    startBadUsb: function (entry) {
+      var data = FZ.fs ? FZ.fs.read(entry.path) : null;
+      var steps = this.parseBadUsb(data || '');
+      this.run = {
+        name: entry.name, steps: steps, idx: 0, log: [''], lineBase: '',
+        mode: steps.length ? 'start' : 'done', done: !steps.length, charIdx: 0, t0: FZ.util.now()
+      };
+      this.state = 'badusbrun';
+    },
+
+    keyBadUsbRun: function (k) {
+      var r = this.run;
+      if (!r) { this.state = 'badusb'; return; }
+      if (k === 'back') { this.state = 'badusb'; this.run = null; return; }
+      if (k === 'ok' && !r.done) {
+        /* OK always fast-forwards: finish whatever step is in progress
+           instantly, regardless of its type */
+        var step = r.steps[r.idx];
+        if (step && step.type === 'string') r.charIdx = step.text.length;
+        if (step) this.finishStep();
+      }
+    },
+
+    finishStep: function () {
+      var r = this.run;
+      var step = r.steps[r.idx];
+      if (step) {
+        if (step.type === 'string') r.log[r.log.length - 1] = r.lineBase + step.text;
+        else if (step.type === 'enter') r.log.push('');
+        /* rem and delay produce no visible terminal text */
+      }
+      r.idx++;
+      r.charIdx = 0;
+      r.t0 = FZ.util.now();
+      if (r.idx >= r.steps.length) { r.mode = 'done'; r.done = true; }
+      else { r.mode = 'start'; r.lineBase = r.log[r.log.length - 1]; }
+    },
+
+    /* advances Bad USB playback; called from tick() every frame. This only
+       mutates the Flipper's own screen state (r.log / dirty flag) — nothing
+       here ever touches the DOM, the keyboard, or any other application. */
+    tickBadUsb: function (now) {
+      var r = this.run;
+      if (!r || r.done) return;
+      var step = r.steps[r.idx];
+      if (!step) { r.mode = 'done'; r.done = true; return; }
+      this.dirtyFlag = true;
+      if (step.type === 'rem') {
+        if (now - r.t0 > 650) this.finishStep();
+      } else if (step.type === 'enter') {
+        if (now - r.t0 > 200) this.finishStep();
+      } else if (step.type === 'delay') {
+        if (now - r.t0 > Math.max(150, step.ms)) this.finishStep();
+      } else if (step.type === 'string') {
+        var CPS = 28; /* simulated "typing" speed, chars/sec */
+        var want = Math.min(step.text.length, Math.floor((now - r.t0) / (1000 / CPS)));
+        r.charIdx = want;
+        r.log[r.log.length - 1] = r.lineBase + step.text.slice(0, want);
+        if (want >= step.text.length) this.finishStep();
       }
     },
 
@@ -577,6 +698,7 @@
         this.dirtyFlag = true;
       }
       if (now - this.findT0 < 3000) this.dirtyFlag = true; /* keep the find-me flash animating */
+      if (this.state === 'badusbrun') this.tickBadUsb(now);
       if (this.dirtyFlag) { this.draw(now); this.dirtyFlag = false; }
     },
 
@@ -621,6 +743,8 @@
           case 'fmdel': this.drawFmDel(c); break;
           case 'fmsaved': this.drawSaved(c); break;
           case 'storage': this.drawStorage(c); break;
+          case 'badusb': this.drawBadUsb(c); break;
+          case 'badusbrun': this.drawBadUsbRun(c); break;
           default: this.drawHome(c); break;
         }
       }
@@ -717,10 +841,10 @@
 
     /* ---------- menu / file-manager rendering (Stage 3) ---------- */
     drawMenu: function (c) {
-      invBoxC(c, 'MENU', 12);
-      var items = ['FILE MANAGER', 'SCREENSHOT', 'STORAGE'];
+      invBoxC(c, 'MENU', 10);
+      var items = ['FILE MANAGER', 'SCREENSHOT', 'STORAGE', 'BAD USB'];
       for (var i = 0; i < items.length; i++) {
-        var y = 24 + i * 10;
+        var y = 20 + i * 9;
         if (i === this.menuSel) {
           c.fillStyle = FG;
           c.fillRect(6, y - 2, 116, 10);
@@ -860,6 +984,60 @@
       drawText(c, 'USED ' + used.toFixed(1) + ' MB', 4, 36);
       drawText(c, 'FREE ' + Math.max(0, 128 - used).toFixed(1) + ' MB', 4, 46);
       drawText(c, 'FILES ' + st.files + ' DIRS ' + st.dirs, 4, 56);
+    },
+
+    /* ---------- Bad USB rendering (Stage 5, UI-only) ---------- */
+    drawBadUsb: function (c) {
+      var b = this.badusb;
+      drawText(c, 'BAD USB', 4, 11);
+      drawTextR(c, b.list.length ? (b.sel + 1) + '/' + b.list.length : '-', 124, 11);
+      if (!b.list.length) {
+        drawTextC(c, 'NO SCRIPTS FOUND', 32);
+        drawTextC(c, 'ADD TO /EXT/BADUSB', 44);
+        return;
+      }
+      for (var i = 0; i < 6; i++) {
+        var idx = b.scroll + i;
+        if (idx >= b.list.length) break;
+        var e = b.list[idx];
+        var y = 19 + i * 7;
+        if (idx === b.sel) {
+          c.fillStyle = FG;
+          c.fillRect(4, y - 1, 120, 8);
+          drawText(c, trunc(e.name, 20), 6, y, BG);
+        } else {
+          drawText(c, trunc(e.name, 20), 6, y, FG);
+        }
+      }
+    },
+
+    drawBadUsbRun: function (c) {
+      var r = this.run;
+      if (!r) { drawTextC(c, 'NO SCRIPT', 32); return; }
+      drawText(c, trunc(r.name, 14), 4, 10);
+      drawTextR(c, (Math.min(r.idx + 1, r.steps.length)) + '/' + r.steps.length, 124, 10);
+
+      /* terminal-style output: last 3 lines (rows reserved below for the
+         always-visible "simulated, no HID" disclaimer) */
+      var lines = r.log;
+      var start = Math.max(0, lines.length - 3);
+      for (var i = 0; i < 3; i++) {
+        var li = start + i;
+        if (li >= lines.length) break;
+        var text = lines[li];
+        var cursor = (li === lines.length - 1 && !r.done && r.steps[r.idx] && r.steps[r.idx].type === 'string') ? '_' : '';
+        drawText(c, trunc(text + cursor, 21), 4, 20 + i * 7);
+      }
+
+      drawText(c, 'SIMULATED-NO HID OUT', 4, 48);
+      if (r.done) {
+        drawTextC(c, 'DONE  BACK=EXIT', 56);
+      } else {
+        var step = r.steps[r.idx];
+        var hint = step && step.type === 'delay' ? 'WAIT' : (step && step.type === 'rem' ? 'NOTE' : 'TYPING');
+        drawText(c, hint, 4, 56);
+        drawTextR(c, 'BACK=STOP', 124, 56);
+      }
     }
   };
 
