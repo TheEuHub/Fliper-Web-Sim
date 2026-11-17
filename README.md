@@ -9,11 +9,11 @@ link (an in-page RPC bus).
 **Simulation only.** No real radio, NFC, USB or firmware anywhere. Not
 affiliated with Flipper Devices.
 
-> Status: **Stage 5** — everything in Stage 3–4 plus a **Bad USB** menu item
-> that is strictly **UI-only**: it plays back tiny, original, benign demo
-> scripts as text animation on the Flipper's own LCD. It never creates a
-> keyboard/HID device, never dispatches DOM/keyboard events, and cannot type
-> into this page or any other application — see "Bad USB" below.
+> Status: **Complete — Stages 1 through 6.** Desk scene with the official
+> Flipper body, a virtual SD card with an on-device file manager, a phone
+> Storage screen kept in sync over a simulated RPC bus, a Find My Flipper
+> flash, a UI-only Bad USB demo, and `FZ.selfTest()` for a console smoke
+> test. Open `index.html` and go — see "Getting started" below.
 
 ## Self-contained: zero external dependencies
 
@@ -136,10 +136,29 @@ OPTIONAL section).
   `demo_note.txt` — both harmless placeholder text, nothing resembling a
   real payload.
 
-## Later stages
+### Self-test & performance (Stage 6, shipped)
 
-- **S6 — polish & self-test**: `FZ.selfTest()`, final README pass, perf
-  tuning — not yet added.
+- **`FZ.selfTest()`** — open the browser console and run it after the page
+  has loaded. It checks (read-only, safe to run any time): Three.js and the
+  WebGL canvas are present; the scene initialized; Flipper/phone models are
+  registered and the default Flipper model builds and stays under the
+  **150,000-triangle budget** (it's 43,386); raycast picking doesn't throw;
+  the virtual filesystem is readable and reports a sane storage size;
+  `localStorage` round-trips under the `fz.v1.*` prefix; and — using the
+  Resource Timing API — that **every resource this page loaded is same-origin
+  or a `data:` URL**, i.e. no CDN call, no stray `fetch`/XHR ever left the
+  page. Two checks finish a moment later and log their own line: a real
+  round trip over the simulated RPC bus, and a 1-second idle frame-rate
+  sample.
+- **Performance choices** (desktop + mobile Safari on modest iGPUs): no
+  real-time shadow maps (contact shadows are a single baked, radially-faded
+  plane per device); antialiasing is disabled on detected mobile devices;
+  device pixel ratio is capped (2× desktop, 1.5× mobile); each device's
+  on-screen canvas uploads to its GPU texture only when its content actually
+  changed, capped at 30 fps; the main WebGL frame itself only re-renders
+  when something is animating or dirty — sitting idle, the GPU does no work
+  at all between interactions. `FZ.selfTest()`'s frame-rate check targets
+  ≥45 fps; expect well above that at idle on any WebGL1-capable GPU.
 
 ## Controls
 

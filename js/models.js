@@ -444,7 +444,8 @@
       screen: scr,
       manifest: manifest,
       dims: { w: 40.09, l: 100.30, h: 25.60 },
-      tilt: 0.045
+      tilt: 0.045,
+      triCount: data.tris   /* exposed for FZ.selfTest()'s 150k budget check */
     };
   }
 

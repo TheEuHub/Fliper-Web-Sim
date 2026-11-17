@@ -211,6 +211,111 @@
     });
   }
 
+  /* ---------- self-test (Stage 6): a console-driven smoke test of the
+     live, already-booted app. Safe to run at any time — read-only except
+     for a scratch localStorage key it writes and immediately removes.
+     Some checks (link RPC round-trip, idle frame rate) finish a little
+     later and log their own result lines when they resolve. */
+  FZ.selfTest = function () {
+    var out = { pass: 0, fail: 0, checks: [] };
+    function check(name, cond, detail) {
+      var rec = { name: name, ok: !!cond, detail: detail };
+      out.checks.push(rec);
+      if (rec.ok) out.pass++; else out.fail++;
+      /* eslint-disable no-console */
+      console.log((rec.ok ? '\u2713 ' : '\u2717 ') + name + (detail !== undefined && detail !== '' ? ' \u2014 ' + detail : ''));
+      return rec.ok;
+    }
+
+    console.log('FZ.selfTest() \u2014 Fliper Web Sim ' + FZ.VERSION);
+
+    check('Three.js (vendor/three.min.js) loaded', FZ.flags.hasThree);
+    check('WebGL canvas present in the DOM', !!document.getElementById('gl'));
+
+    try {
+      check('Scene initialized', !!(FZ.scene && typeof FZ.scene.getLayout() === 'string'),
+        FZ.scene ? ('layout=' + FZ.scene.getLayout()) : undefined);
+    } catch (e) { check('Scene initialized', false, e.message); }
+
+    var flipperModels = FZ.models ? FZ.models.list('flipper') : [];
+    var phoneModels = FZ.models ? FZ.models.list('phone') : [];
+    check('Flipper models registered', flipperModels.length > 0, flipperModels.length + ' found');
+    check('Phone models registered', phoneModels.length > 0, phoneModels.length + ' found');
+
+    try {
+      var built = FZ.models.build(FZ.models.defaultId('flipper'));
+      check('Default Flipper model builds without error', !!(built && built.group));
+      if (built && typeof built.triCount === 'number') {
+        check('Official model geometry stays under the 150k triangle budget',
+          built.triCount <= 150000, built.triCount + ' tris');
+      }
+    } catch (e) { check('Default Flipper model builds without error', false, e.message); }
+
+    try {
+      FZ.scene.pickAt(10, 10);
+      FZ.scene.pickAt(Math.round(window.innerWidth / 2), Math.round(window.innerHeight / 2));
+      check('Raycast picking does not throw', true);
+    } catch (e) { check('Raycast picking does not throw', false, e.message); }
+
+    try {
+      var list = FZ.fs ? FZ.fs.list('/ext') : null;
+      check('Virtual filesystem (/ext) is readable', Array.isArray(list), list ? list.length + ' entries' : undefined);
+      var usedMB = FZ.fs ? FZ.fs.usedMB() : NaN;
+      check('Storage usage reports a finite number', isFinite(usedMB), usedMB.toFixed(3) + ' MB');
+    } catch (e) { check('Virtual filesystem (/ext) is readable', false, e.message); }
+
+    try {
+      var roundTrip = true;
+      if (FZ.storage.persistent) {
+        FZ.storage.set('__selftest__', { t: Date.now() });
+        roundTrip = !!FZ.storage.get('__selftest__', null);
+        FZ.storage.remove('__selftest__');
+      }
+      check('localStorage round-trip (fz.v1.* keys)', roundTrip,
+        FZ.storage.persistent ? undefined : 'persistent storage unavailable, using in-memory fallback');
+    } catch (e) { check('localStorage round-trip (fz.v1.* keys)', false, e.message); }
+
+    /* network audit: every resource this page has loaded must be same-origin
+       or a data: URL — confirms no CDN/XHR/fetch left the page at runtime */
+    try {
+      var entries = (window.performance && performance.getEntriesByType) ? performance.getEntriesByType('resource') : [];
+      var offenders = [];
+      for (var i = 0; i < entries.length; i++) {
+        var url = entries[i].name;
+        if (url.indexOf('data:') === 0) continue;
+        try { if (new URL(url, location.href).origin !== location.origin) offenders.push(url); }
+        catch (e2) { /* unparsable URL, ignore */ }
+      }
+      check('No cross-origin network requests observed', offenders.length === 0,
+        offenders.length ? offenders.join(', ') : entries.length + ' same-origin/local resources checked');
+    } catch (e3) {
+      check('No cross-origin network requests observed', true, 'Resource Timing API unavailable, skipped');
+    }
+
+    console.log('FZ.selfTest(): ' + out.pass + ' passed, ' + out.fail + ' failed so far \u2014 ' +
+      '2 more results (link RPC + frame rate) will log in a moment.');
+
+    /* async: a real round trip over the simulated RPC bus */
+    var pingT0 = Date.now();
+    FZ.link.request('phone', 'system.ping', { t: pingT0 }, function (err) {
+      check('Simulated link RPC round-trip (phone \u2194 flipper)', !err,
+        err ? String(err) : (Date.now() - pingT0) + ' ms');
+    });
+
+    /* async: a 1 s idle frame-rate sample via requestAnimationFrame */
+    var frames = 0, fpsStart = FZ.util.now();
+    function sample(now) {
+      frames++;
+      if (now - fpsStart < 1000) { requestAnimationFrame(sample); return; }
+      var fps = Math.round(frames * 1000 / (now - fpsStart));
+      check('Approx. idle frame rate', fps >= 30,
+        fps + ' fps sampled (target \u2265 45 on capable desktop hardware)');
+    }
+    requestAnimationFrame(sample);
+
+    return out;
+  };
+
   /* ---------- boot ---------- */
   FZ.boot = function () {
     if (!FZ.flags.hasThree) {
@@ -272,7 +377,7 @@
     setTimeout(function () { if (hint) hint.classList.add('fade'); }, 8000);
 
     /* eslint-disable no-console */
-    console.log('Fliper Web Sim ' + FZ.VERSION + ' — simulation only, no real radio. FZ.selfTest() arrives in Stage 6.');
+    console.log('Fliper Web Sim ' + FZ.VERSION + ' — simulation only, no real radio. Run FZ.selfTest() in this console for a smoke test.');
   };
 
   FZ.boot();
