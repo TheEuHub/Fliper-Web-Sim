@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Fliper Web Sim — embed official model (Stage 2 tool)</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0B0B0D; color:#EDEDF0; font:14px/1.5 system-ui, sans-serif;
+         margin:0; padding:32px; max-width:980px; margin-inline:auto; }
+  h1 { font-size:20px; color:#FF8200; }
+  h2 { font-size:15px; margin-top:28px; border-top:1px solid #26262B; padding-top:18px; }
+  .muted { color:#8A8A93; }
+  .card { background:#131316; border:1px solid #26262B; border-radius:10px; padding:16px; margin:14px 0; }
+  button { background:#FF8200; color:#141414; border:0; border-radius:8px;
+           padding:9px 16px; font-weight:600; cursor:pointer; margin:4px 6px 4px 0; }
+  button.secondary { background:#2A2A31; color:#EDEDF0; }
+  button:disabled { opacity:.4; cursor:default; }
+  input[type=file] { color:#8A8A93; }
+  canvas { background:#000; border:1px solid #26262B; border-radius:8px;
+           display:block; margin-top:10px; max-width:100%; }
+  table { border-collapse:collapse; margin:8px 0; }
+  td, th { border:1px solid #26262B; padding:5px 12px; text-align:left; font-size:13px; }
+  .ok { color:#5FD38A; } .bad { color:#FF6B6B; }
+  code { background:#1B1B20; padding:1px 5px; border-radius:4px; font-size:12.5px; }
+  ol li { margin:6px 0; }
+</style>
+</head>
+<body>
+<h1>Embed the official Flipper Zero body → <code>models/flipper-model.js</code></h1>
+<p class="muted">Stage 2 tool. Fully offline: reads a local file with a file input,
+hashes and previews it in-page, emits the generated data file. Nothing is uploaded,
+nothing is fetched. Input: <code>models/source/flipper-zero-body-3d.stl</code>
+(official, rev F7B9C6, 43,386 triangles, GPL-3.0).</p>
+
+<div class="card">
+  <h2 style="border:0;padding:0;margin:0 0 10px">1 · Regenerate from the STL</h2>
+  <input type="file" id="stlFile" accept=".stl">
+  <span class="muted" id="fileStat">no file selected</span>
+  <div id="stats"></div>
+  <canvas id="preview" width="760" height="430" hidden></canvas>
+  <p class="muted" id="previewNote" hidden>Front view (screen side) with the calibration
+     overlay from <code>js/models.js</code> — orange = screen window, D-pad, OK, Back.
+     Compare against <code>models/source/flipper-zero-drawing.png</code>.</p>
+  <button id="dl" disabled>Download flipper-model.js</button>
+  <span class="muted" id="dlStat"></span>
+</div>
+
+<div class="card">
+  <h2 style="border:0;padding:0;margin:0 0 10px">2 · Verify the shipped file</h2>
+  <p class="muted">Re-hashes the base64 payload inside
+     <code>models/flipper-model.js</code> and compares it with the sha256 recorded
+     in its header (must equal the STL's sha256).</p>
+  <button id="verify" class="secondary">Verify shipped flipper-model.js</button>
+  <div id="verifyOut"></div>
+</div>
+
+<div class="card">
+  <h2 style="border:0;padding:0;margin:0 0 10px">Notes</h2>
+  <ol class="muted">
+    <li>Keep this tool in <code>tools/</code> — it loads <code>../models/flipper-model.js</code> for verification.</li>
+    <li>The generated file is <strong>data only</strong> (GPL-3.0); the builder and
+        calibration constants live in <code>js/models.js</code> — if you re-measure
+        features, update <code>OFF</code> there and <code>models/SOURCES.md</code>.</li>
+    <li>Triangle budget is 150k; this model is 43,386 → no decimation, geometry is exact.</li>
+  </ol>
+</div>
+
+<script>
+'use strict';
+/* ---- calibration, mesh frame (mirror of js/models.js OFF / SOURCES.md) ---- */
+var CAL = {
+  screen: { x0: -28.5, x1: -6.5, y0: 1.0, y1: 38.0 },
+  dpad:   { x: -17.5, y: 51.4, r: 10.25 },
+  ok:     { x: -17.5, y: 51.5, r: 2.25 },
+  back:   { x: -10.25, y: 65.5, r: 3.15 },
+  faceZ: 2.10
+};
+
+function sha256hex(bytes) {
+  if (window.crypto && crypto.subtle && crypto.subtle.digest) {
+    return crypto.subtle.digest('SHA-256', bytes).then(function (buf) {
+      return Array.prototype.map.call(new Uint8Array(buf), function (b) {
+        return ('0' + b.toString(16)).slice(-2);
+      }).join('');
+    });
+  }
+  return Promise.resolve(null); /* file:// is a secure context in Chrome/Firefox; guard anyway */
+}
+
+function parseStl(buf) {
+  var dv = new DataView(buf);
+  var tris = dv.getUint32(80, true);
+  if (buf.byteLength !== 84 + 50 * tris) throw new Error('not a binary STL (size mismatch)');
+  var mnx = 1e9, mny = 1e9, mnz = 1e9, mxx = -1e9, mxy = -1e9, mxz = -1e9;
+  var off = 84;
+  var pos = new Float32Array(tris * 9);
+  var nrm = new Float32Array(tris * 3);
+  for (var t = 0; t < tris; t++) {
+    nrm[t * 3] = dv.getFloat32(off, true);
+    nrm[t * 3 + 1] = dv.getFloat32(off + 4, true);
+    nrm[t * 3 + 2] = dv.getFloat32(off + 8, true);
+    off += 12;
+    for (var k = 0; k < 9; k++) {
+      var v = dv.getFloat32(off, true); off += 4;
+      pos[t * 9 + k] = v;
+      var axis = k % 3;
+      if (axis === 0) { if (v < mnx) mnx = v; if (v > mxx) mxx = v; }
+      else if (axis === 1) { if (v < mny) mny = v; if (v > mxy) mxy = v; }
+      else { if (v < mnz) mnz = v; if (v > mxz) mxz = v; }
+    }
+    off += 2;
+  }
+  return { tris: tris, pos: pos, nrm: nrm,
+           bbox: { mnx: mnx, mxx: mxx, mny: mny, mxy: mxy, mnz: mnz, mxz: mxz } };
+}
+
+/* front view (screen side): u = x, v = y, depth = z (higher = closer) */
+function drawPreview(canvas, stl) {
+  var W = canvas.width, H = canvas.height, pad = 6;
+  var b = stl.bbox, du = b.mxx - b.mnx, dv2 = b.mxy - b.mny;
+  var sc = Math.min((W - 2 * pad) / du, (H - 2 * pad) / dv2);
+  var ox = (W - du * sc) / 2, oy = (H - dv2 * sc) / 2;
+  var ctx = canvas.getContext('2d');
+  var img = ctx.createImageData(W, H);
+  var data = img.data;
+  for (var i = 0; i < W * H; i++) { data[i * 4] = 14; data[i * 4 + 1] = 14; data[i * 4 + 2] = 16; data[i * 4 + 3] = 255; }
+  var zbuf = new Float32Array(W * H); zbuf.fill(-1e9);
+  function px(x, y, z) { return [ox + (x - b.mnx) * sc, H - (oy + (y - b.mny) * sc), z]; }
+  var pos = stl.pos, nrm = stl.nrm, tris = stl.tris;
+  for (var t = 0; t < tris; t++) {
+    var i9 = t * 9;
+    var P0 = px(pos[i9], pos[i9 + 1], pos[i9 + 2]);
+    var P1 = px(pos[i9 + 3], pos[i9 + 4], pos[i9 + 5]);
+    var P2 = px(pos[i9 + 6], pos[i9 + 7], pos[i9 + 8]);
+    var area = (P1[0] - P0[0]) * (P2[1] - P0[1]) - (P2[0] - P0[0]) * (P1[1] - P0[1]);
+    if (Math.abs(area) < 1e-9) continue;
+    var nz = nrm[t * 3 + 2];
+    var shade = 0.35 + 0.65 * Math.max(0, nz);
+    var s = Math.min(255, Math.round(255 * shade));
+    var minx = Math.max(0, Math.floor(Math.min(P0[0], P1[0], P2[0])));
+    var maxx = Math.min(W - 1, Math.ceil(Math.max(P0[0], P1[0], P2[0])));
+    var miny = Math.max(0, Math.floor(Math.min(P0[1], P1[1], P2[1])));
+    var maxy = Math.min(H - 1, Math.ceil(Math.max(P0[1], P1[1], P2[1])));
+    for (var y = miny; y <= maxy; y++) {
+      for (var x = minx; x <= maxx; x++) {
+        var cx = x + 0.5, cy = y + 0.5;
+        var w0 = ((P1[0] - P0[0]) * (cy - P0[1]) - (cx - P0[0]) * (P1[1] - P0[1])) / area;
+        var w1 = ((P0[0] - P2[0]) * (cy - P2[1]) - (cx - P2[0]) * (P0[1] - P2[1])) / area;
+        if (w0 < 0 || w1 < 0 || w0 + w1 > 1) continue;
+        var w2 = 1 - w0 - w1;
+        var z = w2 * P0[2] + w1 * P1[2] + w0 * P2[2];
+        var idx = y * W + x;
+        if (z > zbuf[idx]) { zbuf[idx] = z; data[idx * 4] = s; data[idx * 4 + 1] = s; data[idx * 4 + 2] = s; }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  /* calibration overlay */
+  function MX(x) { return ox + (x - b.mnx) * sc; }
+  function MY(y) { return H - (oy + (y - b.mny) * sc); }
+  ctx.strokeStyle = '#FF8200'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(MX(CAL.screen.x0), MY(CAL.screen.y1),
+                 (CAL.screen.x1 - CAL.screen.x0) * sc, (CAL.screen.y1 - CAL.screen.y0) * sc);
+  [[CAL.dpad, 1], [CAL.ok, 0.7], [CAL.back, 0.7]].forEach(function (c) {
+    ctx.beginPath(); ctx.arc(MX(c[0].x), MY(c[0].y), c[0].r * sc, 0, Math.PI * 2); ctx.stroke();
+  });
+  ctx.fillStyle = '#FF8200'; ctx.font = '11px system-ui';
+  ctx.fillText('screen 22×37', MX(CAL.screen.x0), MY(CAL.screen.y1) - 4);
+  ctx.fillText('D-pad r10.25', MX(CAL.dpad.x) + CAL.dpad.r * sc + 4, MY(CAL.dpad.y));
+}
+
+function makeOutput(bytes, shaHex, tris) {
+  /* chunked base64 — String.fromCharCode.apply over 2M args blows the stack */
+  var parts = [], i;
+  for (i = 0; i < bytes.length; i += 0x8000) {
+    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)));
+  }
+  var b64 = btoa(parts.join(''));
+  /* chunk exactly like the shipped file (8192 chars per line) */
+  var lines = [];
+  for (i = 0; i < b64.length; i += 8192) lines.push("      '" + b64.slice(i, i + 8192) + "'");
+  return '/* Fliper Web Sim — models/flipper-model.js\n' +
+    '   OFFICIAL Flipper Zero body mesh, embedded as base64 (no loaders, no XHR).\n' +
+    '   ---------------------------------------------------------------------\n' +
+    '   Source   : flipperdevices/flipperzero-3d-models\n' +
+    '              flipper-zero/body-3d/flipper-zero-body-3d.stl  (rev F7B9C6)\n' +
+    '   License  : GPL-3.0 — full text in LICENSES/GPL-3.0.txt (derived work)\n' +
+    '   Triangles: ' + tris + '   Bytes: ' + bytes.length + '   (under the 150k budget — no decimation)\n' +
+    '   sha256   : ' + shaHex + '\n' +
+    '   Regenerate: open tools/embed-model.html, select\n' +
+    '              models/source/flipper-zero-body-3d.stl, download, replace\n' +
+    '              this file. Verification: same tool, "Verify shipped file".\n' +
+    '   This file is MACHINE-GENERATED data — do not edit by hand.\n' +
+    '   Runtime builder + calibration constants: js/models.js (buildFlipperOfficial). */\n' +
+    '(function () {\n' +
+    "  'use strict';\n" +
+    '  var FM = window.FZ_MODELS = window.FZ_MODELS || {};\n' +
+    '  FM.sources = FM.sources || {};\n' +
+    "  FM.sources['flipper-official'] = {\n" +
+    "    id: 'flipper-official',\n" +
+    "    label: 'Official body (rev F7B9C6, 43k tris)',\n" +
+    "    license: 'GPL-3.0',\n" +
+    '    tris: ' + tris + ',\n' +
+    '    bytes: ' + bytes.length + ',\n' +
+    "    sha256: '" + shaHex + "',\n" +
+    '    b64: [\n' + lines.join(',\n') + '\n    ]\n' +
+    '  };\n' +
+    '  FM.flipper = FM.flipper || [];\n' +
+    '  var exists = false;\n' +
+    "  for (var i = 0; i < FM.flipper.length; i++) if (FM.flipper[i].id === 'flipper-official') exists = true;\n" +
+    "  if (!exists) FM.flipper.unshift({ id: 'flipper-official', label: 'Official body (rev F7B9C6, GPL-3.0)' });\n" +
+    '})();\n';
+}
+
+var current = null; /* {bytes, sha, stl} */
+
+document.getElementById('stlFile').addEventListener('change', function (e) {
+  var f = e.target.files && e.target.files[0];
+  if (!f) return;
+  document.getElementById('fileStat').textContent = f.name + ' (' + f.size + ' bytes)';
+  var fr = new FileReader();
+  fr.onload = function () {
+    try {
+      var bytes = new Uint8Array(fr.result);
+      var stl = parseStl(fr.result);
+      sha256hex(bytes).then(function (sha) {
+        current = { bytes: bytes, sha: sha, stl: stl };
+        var b = stl.bbox;
+        document.getElementById('stats').innerHTML =
+          '<table><tr><th>triangles</th><td>' + stl.tris + '</td></tr>' +
+          '<tr><th>bytes</th><td>' + bytes.length + '</td></tr>' +
+          '<tr><th>sha256</th><td>' + (sha || 'unavailable (crypto.subtle missing)') + '</td></tr>' +
+          '<tr><th>bbox mm</th><td>X ' + (b.mxx - b.mnx).toFixed(2) +
+          ' · Y ' + (b.mxy - b.mny).toFixed(2) + ' · Z ' + (b.mxz - b.mnz).toFixed(2) + '</td></tr></table>';
+        var cv = document.getElementById('preview');
+        cv.hidden = false;
+        document.getElementById('previewNote').hidden = false;
+        drawPreview(cv, stl);
+        document.getElementById('dl').disabled = false;
+        document.getElementById('dlStat').textContent = '';
+      });
+    } catch (err) {
+      document.getElementById('stats').innerHTML = '<span class="bad">Parse error: ' + err.message + '</span>';
+    }
+  };
+  fr.readAsArrayBuffer(f);
+});
+
+document.getElementById('dl').addEventListener('click', function () {
+  if (!current) return;
+  var text = makeOutput(current.bytes, current.sha || 'unavailable', current.stl.tris);
+  var blob = new Blob([text], { type: 'text/javascript' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'flipper-model.js';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+  document.getElementById('dlStat').textContent =
+    'saved (' + text.length + ' chars) — replace models/flipper-model.js with it';
+});
+
+document.getElementById('verify').addEventListener('click', function () {
+  var out = document.getElementById('verifyOut');
+  out.innerHTML = '<span class="muted">loading ../models/flipper-model.js …</span>';
+  var s = document.createElement('script');
+  s.src = '../models/flipper-model.js';
+  s.onload = function () {
+    try {
+      var FM = window.FZ_MODELS;
+      var src = FM && FM.sources && FM.sources['flipper-official'];
+      if (!src) { out.innerHTML = '<span class="bad">FAIL — FM.sources[\'flipper-official\'] missing</span>'; return; }
+      var bin = atob(src.b64.join(''));
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var trisOk = bytes.length === src.bytes && (bytes.length - 84) % 50 === 0 &&
+                   ((bytes.length - 84) / 50) === src.tris;
+      sha256hex(bytes).then(function (sha) {
+        var hashOk = sha && sha === src.sha256;
+        out.innerHTML = '<table>' +
+          '<tr><th>payload bytes</th><td>' + bytes.length + ' (meta ' + src.bytes + ')</td></tr>' +
+          '<tr><th>triangles</th><td>' + src.tris + ' → <span class="' + (trisOk ? 'ok' : 'bad') + '">' +
+          (trisOk ? 'consistent' : 'MISMATCH') + '</span></td></tr>' +
+          '<tr><th>sha256(payload)</th><td>' + (sha || 'unavailable') + '</td></tr>' +
+          '<tr><th>sha256(header)</th><td>' + src.sha256 + '</td></tr>' +
+          '<tr><th>result</th><td class="' + (hashOk ? 'ok' : 'bad') + '">' +
+          (hashOk ? 'OK — payload matches the official STL' : 'FAIL') + '</td></tr></table>';
+      });
+    } catch (err) {
+      out.innerHTML = '<span class="bad">FAIL — ' + err.message + '</span>';
+    }
+  };
+  s.onerror = function () {
+    out.innerHTML = '<span class="bad">FAIL — could not load ../models/flipper-model.js</span>';
+  };
+  document.head.appendChild(s);
+});
+</script>
+</body>
+</html>
