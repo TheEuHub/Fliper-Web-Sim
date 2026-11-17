@@ -1,231 +1,132 @@
-# Fliper Web Sim
+# Flipper Lab · Device workbench
 
-Unofficial fan project: an offline web simulation of a **Flipper Zero** (official
-3D model) lying on a dark desk next to a generic **smartphone**. The Flipper
-screen runs a JavaScript re-implementation of its OS; the phone runs a
-re-implementation of the companion app; the two pair over a simulated Bluetooth
-link (an in-page RPC bus).
+**Open `index.html`.** A Flipper Zero and a companion phone sit on a millimetre-scale 3D desk. Press the Flipper’s white buttons, tap the phone, and pair them to share one virtual SD card. The official **F7B9C6** body, Three.js r128, both simulated operating interfaces and all assets ship in this repository.
 
-**Simulation only.** No real radio, NFC, USB or firmware anywhere. Not
-affiliated with Flipper Devices.
+**Unofficial fan project. Radio operations are simulated; no real RF.** Not affiliated with Flipper Devices. No accounts, telemetry, real Bluetooth, NFC, USB, credential handling, executable payloads or firmware.
 
-> Status: **Complete — Stages 1 through 6.** Desk scene with the official
-> Flipper body, a virtual SD card with an on-device file manager, a phone
-> Storage screen kept in sync over a simulated RPC bus, a Find My Flipper
-> flash, a UI-only Bad USB demo, and `FZ.selfTest()` for a console smoke
-> test. Open `index.html` and go — see "Getting started" below.
+![The offline workbench with the official Flipper Zero and a generic phone](docs/verification/desk.jpg)
 
-## Self-contained: zero external dependencies
+## Run it
 
-Every required file ships inside this repository — nothing is fetched at
-runtime, no CDN, no npm, no build step:
+- **Desktop:** clone or unzip the whole folder, then open `index.html` in a modern browser with WebGL enabled. `file://` works without a server, install, build, cache-warming visit or internet connection. Do not move the HTML away from its sibling directories.
+- **iPhone / iPad:** the supported delivery method is a static server on your own LAN. On a computer in the folder, run `python3 -m http.server 8000 --bind 0.0.0.0`. On the same Wi-Fi, open `http://<computer-LAN-IP>:8000/` in Safari. This serves the same local files; no internet or backend is involved. Opening a local HTML file through the iOS Files preview is best-effort, not the recommended path.
+- WebGL failure produces a full-screen explanation. Reduced-motion preferences disable idle breathing, automatic camera animation, moving packets and Find My shaking/flashing. Sound starts off on a new card; WebAudio is unlocked by a gesture.
 
-| File | What | License |
-|---|---|---|
-| `vendor/three.min.js` | Three.js **r128** UMD build (vendored) | MIT — `LICENSES/MIT.txt` |
-| `models/source/flipper-zero-body-3d.stl` | Official Flipper body model, rev F7B9C6, 43,386 triangles | GPL-3.0 — `LICENSES/GPL-3.0.txt` |
-| `models/source/flipper-zero-drawing.png` | Official reference drawing for visual comparison | (same repo, GPL-3.0) |
-| `models/flipper-model.js` | **Generated**: the same STL embedded as base64 (the mesh the app renders) | GPL-3.0 (derived) |
+### Try the complete loop
 
-Only genuinely optional download left: a CC0 phone GLB for Stage 2+ if you
-prefer it over the built-in procedural phone (see `vendor/README.txt`,
-OPTIONAL section).
-
-## Getting started
-
-1. Open `index.html` directly in **Chrome or Firefox** (`file://` works), or
-   serve the folder:
-   ```
-   python3 -m http.server 8000
-   ```
-   then visit `http://localhost:8000/`.
-2. **iOS / iPadOS**: local `file://` pages are blocked in Safari — use the
-   server path above and open `http://<your-computer-ip>:8000/` on the device
-   (same Wi-Fi). This path is best-effort; desktop Chrome/Firefox is the
-   supported target.
-
-### The official model (Stage 2, shipped)
-
-- The Flipper on the desk is the **official body** (rev F7B9C6): the binary
-  STL is embedded as base64 in `models/flipper-model.js`, decoded at runtime
-  into a `BufferGeometry` — no loaders, no XHR, no network. 43,386 triangles
-  (under the 150k budget → no decimation, geometry exact).
-- Screen/button positions are **calibrated from the mesh** (measurements and
-  the orientation derivation: `models/SOURCES.md`). Buttons are picked through
-  invisible hit proxies that flash orange when pressed — the mesh itself is
-  never modified.
-- Regenerate or verify the embedded file with `tools/embed-model.html`
-  (offline, file input only). The "Placeholder block" remains available in
-  the Models dropdown as the S1 stand-in.
-
-### Virtual SD card & file manager (Stage 3, shipped)
-
-- `js/flipper-fs.js` is a self-contained virtual filesystem rooted at `/ext`
-  (the Flipper SD-card convention). It persists to `localStorage` under
-  `fz.v1.fs` (try/catch, falls back to in-memory if storage is unavailable)
-  and is seeded on first run with a small original tree: `README.txt`,
-  `apps/games/tictactoe.fap`, `subghz/demo_433.sub`, `nfc/demo.nfc`, an empty
-  `ibtn/` folder, `dolphin/level.txt`, and an empty `screenshots/` folder.
-  Every file's content is invented placeholder text — none of it is real
-  firmware, app, sub-GHz, or NFC data.
-- Every mutation (write / mkdir / remove / rename) is recorded as a small op
-  record and broadcast to subscribers, which is the hook Stage 4 uses to keep
-  the phone's Storage screen in sync with the Flipper within ~1 s.
-- **On the Flipper**, press **OK** from the home or connected screen to open
-  the **menu**:
-  - **FILE MANAGER** — ↑/↓ select, **OK** opens a folder or views a file,
-    **→** opens actions (Rename / Delete / Cancel), **←** goes up one folder,
-    **Back** exits up a level (or to the menu at the SD root).
-  - Viewing a `.txt`-style file shows up to 6 scrollable lines; viewing a
-    screenshot renders the saved PNG scaled to fit the LCD.
-  - **Rename**: ←/→ move the cursor, ↑/↓ cycle the character under the
-    cursor through `a-z 0-9 _ - ( ) .` (plus a delete symbol shown as `<`,
-    and an insert slot past the end of the name); **OK** commits, **Back**
-    cancels. Names are edited in lowercase — the LCD font only has uppercase
-    glyphs, so display is uppercase regardless of the stored case.
-  - **Delete** asks for confirmation (**OK** = delete, **Back** = cancel).
-  - **SCREENSHOT** — captures the current LCD canvas as a PNG data URL and
-    saves it to `/ext/screenshots/lcd-YYYYMMDD-HHMMSS.png`, then shows a
-    confirmation screen for ~2.5 s before returning to the menu.
-  - **STORAGE** — shows used/free space (out of a simulated 128 MB card) and
-    file/folder counts.
-
-### Phone Storage screen & Find My Flipper (Stage 4, shipped)
-
-- The phone **never** touches `js/flipper-fs.js` directly. Every list / read /
-  rename / delete goes out as an RPC over `link.js` (`fs.list`, `fs.read`,
-  `fs.rename`, `fs.remove`, handled on the Flipper side in `flipper-os.js`,
-  which is the only code that calls into `FZ.fs`). This keeps the "single
-  source of truth lives on the Flipper" rule intact even though both UIs
-  happen to run in the same page.
-- On the phone's **Connected** screen, tap **OPEN STORAGE** to browse the
-  same `/ext` tree as the Flipper's file manager: folders and files, sizes,
-  pagination for long folders, a **‹ UP** button, and a **⋯** action menu per
-  row (Rename / Delete). Opening a file shows its text (scrollable) or, for
-  screenshots, the decoded image. Renaming uses an on-screen lowercase
-  keyboard (tap letters, ⌫ to delete, no mid-string cursor — a deliberate
-  touch-friendly simplification vs. the Flipper's D-pad character-cycle
-  editor); deleting asks for confirmation.
-- **Sync**: every mutation anywhere (Flipper file manager *or* a phone RPC)
-  fires one `fs.changed` event over the link bus (30–120 ms simulated
-  latency). The phone's Storage screen listens for it and silently
-  re-fetches whatever it's currently showing, and the Flipper's own file
-  manager re-draws the same way — both comfortably inside the ~1 s budget.
-- **Find My Flipper**: tapping the button on the phone's Connected screen
-  sends a `find.flipper` RPC; the Flipper plays an alert tone and flashes its
-  entire LCD "FIND MY FLIPPER / HERE I AM" (inverted, ~4.5 Hz) for 3 seconds,
-  then returns to whatever screen it was on.
-
-### Bad USB — UI-only (Stage 5, shipped)
-
-- **What it is**: a menu item that reads tiny, original, invented scripts
-  from `/ext/badusb` (plain `REM` / `STRING` / `ENTER` / `DELAY` lines — the
-  same four instructions real Bad USB "Ducky Script" uses, reimplemented
-  from scratch) and plays them back as a **terminal-style text animation on
-  the Flipper's LCD**, character by character.
-- **What it is not**: at no point does this code create a keyboard/HID
-  device, call the WebHID/WebUSB/WebSerial APIs, dispatch a `KeyboardEvent`,
-  call `document.execCommand`, or touch the clipboard. It cannot type into
-  this page, a different tab, or any other application — there's a one-line
-  source audit in the test harness plus a permanent on-screen reminder
-  ("SIMULATED — NO HID OUT") the whole time a script is "running".
-- **On the Flipper**: open the menu → **BAD USB** → ↑/↓ pick a script → **OK**
-  to run it. While it plays, **OK** fast-forwards the current line and
-  **Back** stops immediately; when it finishes, **Back** returns to the list.
-- Two demo scripts ship in the seed filesystem: `demo_hello.txt` and
-  `demo_note.txt` — both harmless placeholder text, nothing resembling a
-  real payload.
-
-### Self-test & performance (Stage 6, shipped)
-
-- **`FZ.selfTest()`** — open the browser console and run it after the page
-  has loaded. It checks (read-only, safe to run any time): Three.js and the
-  WebGL canvas are present; the scene initialized; Flipper/phone models are
-  registered and the default Flipper model builds and stays under the
-  **150,000-triangle budget** (it's 43,386); raycast picking doesn't throw;
-  the virtual filesystem is readable and reports a sane storage size;
-  `localStorage` round-trips under the `fz.v1.*` prefix; and — using the
-  Resource Timing API — that **every resource this page loaded is same-origin
-  or a `data:` URL**, i.e. no CDN call, no stray `fetch`/XHR ever left the
-  page. Two checks finish a moment later and log their own line: a real
-  round trip over the simulated RPC bus, and a 1-second idle frame-rate
-  sample.
-- **Performance choices** (desktop + mobile Safari on modest iGPUs): no
-  real-time shadow maps (contact shadows are a single baked, radially-faded
-  plane per device); antialiasing is disabled on detected mobile devices;
-  device pixel ratio is capped (2× desktop, 1.5× mobile); each device's
-  on-screen canvas uploads to its GPU texture only when its content actually
-  changed, capped at 30 fps; the main WebGL frame itself only re-renders
-  when something is animating or dirty — sitting idle, the GPU does no work
-  at all between interactions. `FZ.selfTest()`'s frame-rate check targets
-  ≥45 fps; expect well above that at idle on any WebGL1-capable GPU.
+1. On the phone tap **Scan for devices → Flipper Zero**. Check the six-digit PIN on both displays. Tap **Confirm pairing** on the phone or press **OK** on the Flipper. The inspector’s **Pair devices** button offers the same flow. A thin animated beam appears only while connected.
+2. On the phone open **Archive → subghz**. On the Flipper press **OK → Sub-GHz → Scan spectrum**. When the result appears, press **OK** to save it. It appears on the phone without reloading.
+3. Tap **···** beside the file on the phone to rename or delete it. From the Flipper home screen, **Down** opens Archive; it reads the same card. **Right → Device name** changes the name on both devices.
+4. The phone’s **Device** tab shows battery, firmware and used card space from RPC. Try **Find my Flipper**, or **Firmware update → Install local update** to watch checking, downloading, uploading and rebooting. None of these steps transfers firmware.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| Drag empty desk | Orbit camera |
-| Drag a device | Lift + free-axis rotate (eases back on release) |
-| Scroll / pinch | Zoom |
-| Double-click / double-tap | Reset view |
-| Click Flipper 3D buttons | D-pad / OK / Back drive the OS |
-| ↑ ↓ ← → / Enter / Esc | Keyboard for the Flipper |
-| OK on the Flipper home screen | Open the menu (File Manager / Screenshot / Storage) |
-| In the file manager | ↑↓ move, OK open/view, → actions, ← up a folder, Back exit |
-| Tap phone screen | Use the companion app |
-| Phone "Open Storage" (while connected) | Browse the same SD card over RPC, rename/delete, view files |
-| Phone "Find My Flipper" (while connected) | Flashes the Flipper's LCD for ~3 s |
-| Flipper menu → BAD USB | Pick a demo script, OK to play it on the LCD (OK = skip step, Back = stop) |
-| Phone side buttons | Power = sleep/wake screen, volume = app volume |
-| Top bar | Layout toggle, Models, Help, Sound, Reset storage, Link debug |
+| Drag empty desk | Orbit the camera |
+| Drag device body | Lift and freely rotate; release to settle back |
+| Wheel / two-finger pinch / − and + | Zoom |
+| Double-click / double-tap the desk, or reset-camera button | Restore the current view |
+| Both / Flipper / Phone, or a Scene devices row | Dolly to a fitted view; neither model is switched off |
+| White D-pad, OK, Back, or arrows / Enter / Esc | Drive the 128×64 monochrome LCD shell |
+| Home: OK / Down / Right / Left | Main menu / Archive / Settings / Apps |
+| File manager: Up/Down, OK, Right, Back | Select, open, actions, return |
+| Name editor | Type a replacement name, or Left/Right for cursor and Up/Down for character; OK saves, Back cancels |
+| Phone display | Tap controls or drag a list/preview to scroll; a 6 CSS-pixel threshold separates taps from drags |
+| Phone side rail | Long white power clicker sleeps/wakes; two shorter clickers change synthesized volume |
 
-## Folder layout
+**Models** switches the official body between normal and colour-coded part inspection, and the procedural phone between two sizes, without disconnecting. The viewport expand button gives either screen more space. On narrow screens devices are framed vertically; **Device link** beneath the viewport opens the inspector. **Help**, **Sound**, **Link debug** and the **Session storage** sliders icon are independent of the on-device menus.
+
+### Calibration
+
+Append `?calibrate` to the page address. Adjust the screen quad’s XYZ position, dimensions and rotation, or each button anchor, axis and travel. Edits apply live and autosave locally. Use **LCD alignment pattern** and **Models → Official body · part inspection** to inspect the window and sectors. **Copy manifest** falls back to selectable JSON if clipboard access is unavailable. **Factory values** restores measured defaults. See [model provenance and measurements](models/SOURCES.md).
+
+## What runs on the devices
+
+The main menu follows the reference emulator’s built-in order: **Sub-GHz, 125 kHz RFID, NFC, Infrared, GPIO, iButton, Bad USB, U2F, Apps, Settings**. The font, dolphin’s three animation states, remote faces and phone graphics are drawn locally, not copied from firmware.
+
+| Tool | Simulated operation | Virtual SD directory |
+|---|---|---|
+| Sub-GHz | Sweep an invented spectrum; save a randomized named reading | `/ext/subghz` |
+| 125 kHz RFID / NFC | Scan a three-tag inventory, choose a token, save its record | `/ext/lfrfid`, `/ext/nfc` |
+| Infrared | Choose an imaginary brand’s remote, tap controls, save its state with Down | `/ext/infrared` |
+| GPIO | Left/Right select a pin, OK toggles it, Down saves the eight-pin bank | `/ext/gpio` |
+| iButton | Read the virtual contact slot; Right writes a new synthetic token, OK saves a reading | `/ext/ibutton` |
+| Bad USB | Play inert text lines on the LCD; OK advances or saves the completed log | `/ext/badusb` |
+| U2F | Acknowledge an invented challenge, save its pretend response | `/ext/u2f` |
+
+Apps includes **Clock** (12/24 h), **Hex viewer** (UTF-8 bytes from actual virtual files), **Music player** (original synthesized notes and animated bars), Archive, file manager, LCD screenshot capture and storage information. There is **no `.fap` execution**. Settings includes device name, brightness, sound and firmware/about information.
+
+## Storage and link
+
+- Device settings live in `flipper-os.js`; the card’s only tree lives in `flipper-fs.js`. The phone never reads either directly. Its lists and dashboard are response snapshots, refreshed by change events.
+- The link transports `{id, type, cmd, payload, error}` with **30–120 ms per message**, including the response leg. Commands include `system.info/ping/rename`, `storage.list/read/rename/delete/info`, `app.find`, `firmware.update.start/progress` and `link.status`. Discovery/PIN control messages are separate. Storage and device RPCs are gated by the current connection generation. Debug includes round-trip timing, packet log and 0/10/30% loss; dropped requests time out.
+- Signal bars use the 3D distance between display anchors, not camera zoom. Pairing is session-only. Files, preferences and calibration use `fz.v1.*` keys behind guarded storage with an in-memory fallback. Browser quotas and `file://` storage rules vary.
+- **Session storage → Export JSON** backs up the SD tree, device settings and audio preferences. Import validates the version, tree, filenames, depth, node count and content size before asking to replace data. Model/camera selections and calibration are local workspace preferences, not part of the SD backup. **Reset storage** asks first, removes only `fz.v1.*` keys and restores the small demo card. Export before moving the folder or changing browser/origin.
+
+## Repository map
 
 ```
-index.html            entry point (classic <script> tags, explicit order)
-css/style.css
-js/core.js            namespace FZ, flags, storage (fz.v1.*), utils
-js/audio.js           WebAudio synth (off by default, unlock on first gesture)
-js/screen.js          canvas Screen objects with dirty flag + 30 fps texture cap
-js/link.js            simulated RPC bus (30–120 ms latency, loss toggle)
-js/flipper-os.js      128×64 LCD OS (boot, home, pairing, tools, settings)
-js/flipper-fs.js      virtual SD card (Stage 3)
-js/phone-app.js       companion app screens
-js/models.js          model registry, placeholder/procedural + official builder
-js/scene.js           Three.js desk scene, controls, raycast input, beam
-js/ui.js              top bar, help, debug panel, keyboard, boot
-models/flipper-model.js  generated: official STL as base64 (GPL-3.0)
-models/SOURCES.md     provenance, mesh measurements, calibration table
-models/source/        official STL + reference drawing (GPL-3.0)
-tools/embed-model.html  offline STL → flipper-model.js generator/verifier
-vendor/three.min.js   vendored Three.js r128 (MIT)
-vendor/README.txt     provenance of every vendored file + optional downloads
-LICENSES/             MIT.txt (Three.js), GPL-3.0.txt (Flipper model files)
+index.html, css/style.css      Classic-script entry and responsive workbench
+js/core.js, audio.js          FZ namespace, storage, events, synthesized audio
+js/screen.js, scene.js        Dirty canvas textures, camera, picking and animation
+js/models.js                  Indexed official mesh / procedural phone builders
+js/flipper-{os,fs,tools,apps}.js  LCD shell, virtual SD, instruments and mini-apps
+js/phone-app.js, link.js      Companion client and in-page RPC channel
+js/ui.js, icons.js            Inspector, controls, calibration, backups and glyphs
+js/self-test.js               Asynchronous, cleanup-safe integration smoke test
+models/library.js             Registry (window.FZ_MODELS)
+models/manifest.js            Validated calibration overlays
+models/flipper-model.js       Generated positions, indices, parts and defaults
+models/source/                Original official STL, drawing and upstream LICENSE
+vendor/, LICENSES/            Pinned Three.js UMD and license texts
+DEPENDENCIES.md                Source URLs, versions, SHA-256s
+models/SOURCES.md             Geometry provenance, part counts and alignment
+tools/                        Conversion, vendoring and optional verification
+docs/verification/            Actual browser screenshots, not runtime assets
 ```
 
-## How it works (short)
+All app scripts are classic IIFEs. There are no ES modules, runtime model loaders, asset fetches, CDNs, remote fonts or audio files. The page’s CSP disables connections. Screens use emissive canvas textures: logical LCD pixels are enlarged with nearest filtering; power-of-two backing textures support clean minification. Only dirty textures upload, at **≤30 fps**. Cached vectors/quaternions service animation. WebGL draws on change or while animating; the next visible screen deadline wakes an otherwise idle scene. Pixel ratio is capped at 2 desktop / 1.5 mobile. Contact shadows and warm pools are procedural gradients; there are no shadow maps or environment files.
 
-- Single source of truth: Flipper state lives only in `flipper-os` / `flipper-fs`.
-  The phone never reads it directly — it sends RPC requests through `link.js`
-  (`{id, type, cmd, payload, error}`) and renders responses/events.
-- Each device screen is a canvas `Screen` with a dirty flag; textures update
-  only when dirty, capped at 30 fps; WebGL renders on demand.
-- Sound is synthesized with WebAudio, **off by default**, unlocked on first
-  gesture. Preferences persist in `localStorage` (`fz.v1.*`, try/catch with
-  in-memory fallback). "Reset storage" wipes them.
+## Verification
 
-## Simulated vs real
+**Browser run:** Chromium 141.0.7390.0, opened via `file://`, network emulation offline, no file-access or web-security bypass. **23 grouped checks passed, zero console/page errors, zero network requests.** The 20 local file loads include the HTML itself. Built-in `await FZ.selfTest()` returned **10 PASS / 0 FAIL** from a disconnected session. It performs a real pair/RPC/read/write/delete/rename cycle with a scratch file and restores the prior name and link state; run it outside an update or pairing dialog.
 
-- All radio operations are simulated; no real RF.
-- All captures, PINs, signal strengths and file contents are invented.
-- No HID output, credential capture, replay or attack functionality.
+- Sample timings including UI input: **2.26 s** to pair, **331 ms** for a saved Sub-GHz capture to reach Archive, **283 ms** for a Settings rename to reach the phone. Phone deletion removed the entry from the open Flipper file manager.
+- Verified all six physical Flipper controls and their motion, phone power/volume, mouse orbit/lift/return, wheel zoom, double-click reset, touch pinch/tap/double-tap, UV drag-scroll, model switching, calibration persistence, JSON export/import, scoped reset, blocked-storage fallback, reduced motion and the WebGL failure screen.
+- **43,834 rendered triangles** in the standard two-device scene, **43,852** with the beam/packets. An unchanged menu with reduced motion rendered **zero extra frames** over the idle sample. An active-beam sample in the sandbox’s **software** renderer was **15 fps**, not a hardware benchmark. The 45+ fps target on an integrated GPU and physical iOS Safari performance are **not verified**.
+- Evidence: [desk](docs/verification/desk.jpg), [paired desk](docs/verification/connected.jpg), [colour-coded facets and L/R LCD pattern](docs/verification/parts-and-lcd.jpg), [LCD canvas](docs/verification/flipper-lcd.png), [phone canvas](docs/verification/phone-dashboard.png), [touch viewport](docs/verification/mobile.jpg).
+
+**Re-run without installing anything in this repo:**
+
+```sh
+python3 tools/convert-model.py     # regenerate from the committed official STL
+python3 tools/verify-offline.py    # Python 3.9+ and Node: hashes, all facets,
+                                   # deterministic conversion, GLB/ASCII fixtures,
+                                   # all JS syntax, URLs and asset paths
+```
+
+The optional browser harness requires Chromium and Puppeteer **only for QA**. For example, on a system with Chrome installed:
+
+```sh
+qa=$(mktemp -d)
+npm install --prefix "$qa" puppeteer-core@24.25.0
+NODE_PATH="$qa/node_modules" CHROME_BIN=/path/to/chrome \
+  node tools/verify-browser.cjs . "$qa/screenshots"
+```
+
+The harness uses a temporary browser profile and does not touch your own session. For a headless software GPU use `FZ_SOFTWARE_GL=1`; `FZ_NO_SANDBOX=1` is only for already isolated test containers. This run used the Chromium binary and SwiftShader from `@sparticuz/chromium@141.0.0`, outside the checkout. None of these packages is needed by the application.
+
+## Assumptions and limits
+
+- This is a **behavioral re-implementation**, not a firmware emulator. The [reference main-menu registry](https://github.com/ZDStudios/Flipper-Zero-Emulator/blob/23edb1bf355698cc0d9c37f297c2102ecd1b114f/pyflipper/core/registry.py) and [Android companion components](https://github.com/flipperdevices/Flipper-Android-App/tree/bc6d8151d99e84947423b1cf55bc93fc5498f60f/components) informed the flows. No code, bitmap font, app icon, protocol or firmware from either was vendored.
+- Confirming the matching PIN on **either** screen completes the local handshake. The inspector mirrors the same controls for small screens. The beam visualizes an established local connection, not real transmissions.
+- Battery is a fixed simulated 87%; card capacity is a nominal 128 MB, not a reserved allocation. Firmware advances between two local version strings. Remotes, keys and challenges have no compatibility with real devices. Bad USB is a **read-only text animation** with no HID interpreter or output.
+- The official body is not remodelled or decimated. Its 37 × 22 mm moulded recess surrounds a 2:1 active display and unlit bezel; the upstream model intentionally omits internals. The phone is original and procedural; the optional external CC0 phone was skipped. Static embedded GLB input is supported by the *offline converter*, not a general-purpose runtime GLTF loader.
+- Mouse/touch verification used real browser input events and Chromium touch emulation, not a physical iPhone, Bluetooth connection or integrated-GPU laptop.
 
 ## Licenses
 
-- `vendor/three.min.js` — Three.js, MIT license (full text:
-  `LICENSES/MIT.txt`).
-- `models/source/flipper-zero-body-3d.stl` and the reference drawing are from
-  flipperdevices/flipperzero-3d-models, GPL-3.0 (full text:
-  `LICENSES/GPL-3.0.txt`). Stage 2 `models/flipper-model.js` is derived from
-  these files and remains GPL-3.0 (see `models/SOURCES.md`).
-- All other code and sprites in this repository are original, MIT.
+- **Official STL, drawing, and derived `models/flipper-model.js`: GPL-3.0.** The generated mesh remains GPL-3.0. See [upstream source credit](models/SOURCES.md) and [full license](LICENSES/GPL-3.0.txt).
+- **Three.js r128: MIT**, [original license](LICENSES/MIT.txt). See [dependency hashes and the reproducible vendoring script](DEPENDENCIES.md).
+- **Original application, procedural phone, sprites, icons and tools: MIT**, continuing this repository’s original licensing; see [project license](LICENSES/PROJECT-MIT.txt). The upstream model’s license is separate. Flipper Zero is a Flipper Devices product; this project is not endorsed by them.

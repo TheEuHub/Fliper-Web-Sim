@@ -1,108 +1,290 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<title>Fliper Web Sim — offline Flipper Zero + phone simulator</title>
-<link rel="stylesheet" href="css/style.css">
-</head>
-<body>
-
-<div id="missing" class="missing" hidden>
-  <div class="missing-card">
-    <h1 id="missing-title">Missing dependency</h1>
-    <p id="missing-detail"></p>
-  </div>
-</div>
-
-<header id="topbar" class="topbar">
-  <div class="brand">Fliper Web Sim<span class="badge">fan sim · simulation only</span></div>
-  <div class="tools">
-    <div class="seg" id="layout-seg" role="group" aria-label="Camera layout">
-      <button type="button" data-layout="both" class="on">Both</button>
-      <button type="button" data-layout="flipper">Flipper</button>
-      <button type="button" data-layout="phone">Phone</button>
-    </div>
-    <span class="sel-label">Models</span>
-    <select id="model-flipper" class="model-select" aria-label="Flipper model"></select>
-    <select id="model-phone" class="model-select" aria-label="Phone model"></select>
-    <button type="button" id="btn-help">Help</button>
-    <button type="button" id="btn-sound">Sound: off</button>
-    <button type="button" id="btn-reset">Reset storage</button>
-    <button type="button" id="btn-debug">Link debug</button>
-  </div>
-</header>
-
-<main id="stage">
-  <canvas id="gl"></canvas>
-
-  <div id="hint" class="hint">Drag desk to orbit · drag a device to lift · scroll / pinch to zoom · double-click to reset · arrows / Enter / Esc drive the Flipper</div>
-
-  <div id="debug-panel" class="panel" hidden>
-    <div class="panel-head">
-      <span>Link debug</span>
-      <button type="button" id="debug-close" class="icon-btn" aria-label="Close">×</button>
-    </div>
-    <div class="panel-grid">
-      <span>State</span><span id="dbg-state">-</span>
-      <span>Signal</span><span id="dbg-signal">-</span>
-      <span>Latency</span><span>30–120 ms</span>
-      <span>Messages</span><span id="dbg-counts">0 sent · 0 dropped</span>
-      <span>Last RTT</span><span id="dbg-rtt">-</span>
-    </div>
-    <label class="panel-row">Packet loss
-      <select id="dbg-loss">
-        <option value="0">0%</option>
-        <option value="0.1">10%</option>
-        <option value="0.3">30%</option>
-      </select>
-    </label>
-    <div class="panel-row">
-      <button type="button" id="dbg-ping">Ping</button>
-      <span class="panel-note">simulated RPC · no radio</span>
-    </div>
-    <pre id="dbg-log" class="dbg-log"></pre>
-  </div>
-
-  <div id="help-overlay" class="overlay" hidden>
-    <div class="overlay-card">
-      <div class="overlay-head">
-        <span>Controls</span>
-        <button type="button" id="help-close" class="icon-btn" aria-label="Close">×</button>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta
+      name="description"
+      content="An offline, interactive 3D Flipper Zero and companion phone. An unofficial, simulation-only workbench."
+    />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="css/style.css" />
+    <title>Flipper Lab — Device workbench</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="wordmark">
+        <span class="brand-mark" aria-hidden="true"
+          ><svg viewBox="0 0 32 32"><path d="M4 18h5l4-12 6 21 4-14h5" /></svg></span
+        ><strong>Flipper Lab</strong><span class="version">v1.0</span>
       </div>
-      <ul class="help-list">
-        <li><b>Drag empty desk</b> — orbit the camera</li>
-        <li><b>Drag a device</b> — lift and rotate it freely; it eases back on release</li>
-        <li><b>Scroll / pinch</b> — zoom</li>
-        <li><b>Double-click / double-tap</b> — reset the view</li>
-        <li><b>Click Flipper buttons</b> (D-pad, OK, Back) or use <b>↑ ↓ ← → / Enter / Esc</b></li>
-        <li><b>OK on the Flipper home screen</b> — opens the menu: File Manager, Screenshot, Storage</li>
-        <li><b>File Manager</b> — ↑↓ move, OK open/view, → actions (rename/delete), ← up a folder, Back exits</li>
-        <li><b>Bad USB</b> (menu) — ↑↓ pick a demo script, OK plays it back on the LCD (OK again skips a step, Back stops). UI-only: it never sends real keystrokes anywhere</li>
-        <li><b>Tap the phone screen</b> — use the companion app; side buttons sleep/wake and adjust volume</li>
-        <li><b>Layout toggle</b> — dollies the camera between Both / Flipper / Phone</li>
-        <li><b>Models</b> — switch the 3D model used per device</li>
-        <li><b>Link debug</b> — watch the simulated RPC bus, force packet loss, ping</li>
-      </ul>
-      <p class="overlay-note">Unofficial fan project. All radio, NFC, USB and firmware behaviour is simulated in-page. No real hardware, no network calls, no telemetry.</p>
+      <nav class="top-actions" aria-label="Workbench tools">
+        <button id="btn-models" class="nav-button" aria-haspopup="dialog">
+          <i data-icon="layers"></i><span>Models</span><i class="small" data-icon="down"></i>
+        </button>
+        <button id="btn-sound" class="nav-button" aria-label="Enable sound" aria-pressed="false">
+          <i data-icon="mute"></i><span>Sound off</span>
+        </button>
+        <button id="btn-help" class="nav-button" aria-haspopup="dialog">
+          <i data-icon="help"></i><span>Help</span>
+        </button>
+        <span class="nav-divider"></span
+        ><span class="offline-pill"><b class="dot green"></b>Offline ready</span>
+      </nav>
+    </header>
+    <main class="workspace">
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <div class="eyebrow"><span class="orange-line"></span>HARDWARE SIMULATOR</div>
+          <h1 id="page-title">Device workbench</h1>
+          <p>A virtual Flipper Zero and its companion, connected on your desk.</p>
+        </div>
+        <div class="session-tools">
+          <button class="outline" id="btn-debug">
+            <i data-icon="terminal"></i><span>Link debug</span></button
+          ><button
+            class="square"
+            id="btn-storage"
+            title="Session storage"
+            aria-label="Session storage"
+          >
+            <i data-icon="settings"></i></button
+          ><button
+            id="btn-inspector"
+            class="square"
+            aria-label="Open session inspector"
+            title="Session inspector"
+          >
+            <i data-icon="panel"></i>
+          </button>
+        </div>
+      </section>
+      <div class="bench">
+        <section class="viewport-card" id="viewport-card" aria-label="Interactive scene">
+          <header class="viewport-bar">
+            <div class="section-name">
+              <i data-icon="cube"></i>
+              <h2>Scene viewport</h2>
+            </div>
+            <div class="view-tools">
+              <div id="layout-seg" class="seg" role="group" aria-label="Camera layout">
+                <button data-layout="both" aria-pressed="true" class="on">Both</button
+                ><button data-layout="flipper" aria-pressed="false">Flipper</button
+                ><button data-layout="phone" aria-pressed="false">Phone</button>
+              </div>
+              <button
+                class="plain-icon expand"
+                id="btn-expand"
+                title="Expand viewport"
+                aria-label="Expand viewport"
+                aria-pressed="false"
+              >
+                <i data-icon="expand"></i>
+              </button>
+            </div>
+          </header>
+          <div id="stage">
+            <canvas
+              id="gl"
+              tabindex="0"
+              aria-label="3D desk. Drag empty space to orbit. Click white device buttons or use the keyboard."
+            ></canvas>
+            <div class="vignette"></div>
+            <div class="view-stamp">
+              <span class="live-mark"></span>LIVE VIEW<span class="stamp-rule"></span
+              ><span class="stamp-sub">PERSPECTIVE</span>
+            </div>
+            <span class="scene-number">SCENE <b>/</b> 01</span> <span class="corner tl"></span
+            ><span class="corner tr"></span><span class="corner bl"></span
+            ><span class="corner br"></span>
+            <div class="device-tag" id="label-flipper" hidden>
+              <b>01</b>FLIPPER ZERO<span class="leader"></span>
+            </div>
+            <div class="device-tag phone-tag" id="label-phone" hidden>
+              <b>02</b>COMPANION<span class="leader"></span>
+            </div>
+            <div class="axis-widget" aria-hidden="true">
+              <svg id="axes" viewBox="0 0 48 48">
+                <circle cx="22" cy="24" r="2" fill="#cfc9bd" />
+                <line x1="22" y1="24" x2="39" y2="27" stroke="#e89958" />
+                <line x1="22" y1="24" x2="22" y2="8" stroke="#c6c4bd" />
+                <line x1="22" y1="24" x2="12" y2="34" stroke="#767a80" /></svg
+              ><span>XYZ</span>
+            </div>
+            <div class="camera-tools" aria-label="Camera tools">
+              <button id="zoom-out" title="Zoom out" aria-label="Zoom out">
+                <i data-icon="minus"></i></button
+              ><span class="camera-zoom" id="zoom-value">100%</span
+              ><button id="zoom-in" title="Zoom in" aria-label="Zoom in">
+                <i data-icon="plus"></i></button
+              ><span class="tool-divider"></span
+              ><button id="btn-view-reset" title="Reset camera" aria-label="Reset camera">
+                <i data-icon="reset"></i>
+              </button>
+            </div>
+            <div class="scale-widget"><span>20 mm</span><b id="ruler"></b></div>
+          </div>
+          <footer class="viewport-foot">
+            <button id="mobile-link" aria-label="Open device link">
+              <i data-icon="link"></i><span>Device link</span><i data-icon="right"></i></button
+            ><span class="desk-hint"><i data-icon="hand"></i>Drag empty space to orbit</span
+            ><span><i data-icon="layers"></i>1 unit = 1 mm</span>
+          </footer>
+        </section>
+        <aside class="inspector" id="inspector" aria-label="Session inspector">
+          <div class="mobile-drawer-head">
+            <strong>Session inspector</strong
+            ><button id="close-inspector" class="plain-icon" aria-label="Close inspector">
+              <i data-icon="close"></i>
+            </button>
+          </div>
+          <section class="card link-card">
+            <header class="card-head">
+              <div class="section-name">
+                <i data-icon="link"></i>
+                <h2>Device link</h2>
+              </div>
+              <span class="state-pill" id="link-pill"><b class="dot"></b>Idle</span>
+            </header>
+            <div class="link-map" id="link-map" aria-label="Simulated Bluetooth link diagram">
+              <div class="endpoint"><i data-icon="flipper"></i><span>FLIPPER</span></div>
+              <div class="route"><b></b><i data-icon="bluetooth"></i><b></b></div>
+              <div class="endpoint"><i data-icon="phone"></i><span>PHONE</span></div>
+            </div>
+            <p id="pair-description" aria-live="polite">
+              Connect the devices over a simulated Bluetooth link.
+            </p>
+            <button id="pair-action" class="primary">
+              <i data-icon="bluetooth"></i><span>Pair devices</span
+              ><i data-icon="arrow"></i></button
+            ><button id="link-secondary" hidden class="text-button"></button>
+          </section>
+          <section class="card hardware-card">
+            <header class="card-head">
+              <div class="section-name">
+                <i data-icon="cpu"></i>
+                <h2>Scene devices</h2>
+              </div>
+              <span class="count">02</span>
+            </header>
+            <button class="device-row" data-focus="flipper">
+              <span class="device-icon warm"><i data-icon="flipper"></i></span
+              ><span class="device-copy"
+                ><strong id="hardware-flipper">Flipper Zero</strong
+                ><small>F7B9C6 · Official model</small></span
+              ><i class="chevron" data-icon="right"></i>
+            </button>
+            <button class="device-row" data-focus="phone">
+              <span class="device-icon"><i data-icon="phone"></i></span
+              ><span class="device-copy"
+                ><strong>Companion phone</strong
+                ><small id="phone-kind">Generic · Procedural</small></span
+              ><i class="chevron" data-icon="right"></i>
+            </button>
+          </section>
+          <section class="card activity-card">
+            <header class="card-head">
+              <div class="section-name">
+                <i data-icon="pulse"></i>
+                <h2>Session activity</h2>
+              </div>
+              <span class="tiny-live"><b class="dot green"></b>LIVE</span>
+            </header>
+            <ol id="activity" aria-label="Recent session events"></ol>
+          </section>
+        </aside>
+      </div>
+      <section class="control-strip" aria-label="Quick controls">
+        <div class="guide-title">
+          <i data-icon="keyboard"></i>
+          <h2>Input guide</h2>
+        </div>
+        <div class="guide-item">
+          <i data-icon="orbit"></i>
+          <div><b>Orbit view</b><small>Drag the desk</small></div>
+        </div>
+        <div class="guide-item">
+          <i data-icon="rotate"></i>
+          <div><b>Rotate device</b><small>Drag its body</small></div>
+        </div>
+        <div class="guide-item">
+          <i data-icon="zoom"></i>
+          <div><b>Zoom</b><small>Scroll or pinch</small></div>
+        </div>
+        <div class="guide-item">
+          <i data-icon="dpad"></i>
+          <div><b>Navigate OS</b><small>Arrows · Enter · Esc</small></div>
+        </div>
+        <button
+          class="plain-icon"
+          id="guide-help"
+          title="All controls"
+          aria-label="Show all controls"
+        >
+          <i data-icon="right"></i>
+        </button>
+      </section>
+    </main>
+    <footer class="statusbar">
+      <div>
+        <b class="dot green"></b><span>Engine online</span><b class="foot-sep"></b
+        ><span>Three.js r128</span><b class="foot-sep"></b><span id="scene-tris">— triangles</span>
+      </div>
+      <div><i data-icon="shield"></i><span>Simulation only · No real RF</span></div>
+    </footer>
+    <div class="drawer-shade" id="drawer-shade" hidden></div>
+    <div
+      class="overlay"
+      id="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+      hidden
+    >
+      <section class="dialog">
+        <header class="dialog-head">
+          <div>
+            <div class="eyebrow">WORKBENCH TOOLS</div>
+            <h2 id="modal-title"></h2>
+          </div>
+          <button class="plain-icon" id="modal-close" aria-label="Close dialog">
+            <i data-icon="close"></i>
+          </button>
+        </header>
+        <div class="dialog-body" id="dialog-body"></div>
+      </section>
     </div>
-  </div>
-
-  <div id="toast" class="toast" hidden></div>
-</main>
-
-<script src="vendor/three.min.js"></script>
-<script src="js/core.js"></script>
-<script src="js/audio.js"></script>
-<script src="js/screen.js"></script>
-<script src="js/link.js"></script>
-<script src="js/flipper-fs.js"></script>
-<script src="js/flipper-os.js"></script>
-<script src="js/phone-app.js"></script>
-<script src="js/models.js"></script>
-<script src="models/flipper-model.js"></script>
-<script src="js/scene.js"></script>
-<script src="js/ui.js"></script>
-</body>
+    <div id="toast" class="toast" role="status" hidden></div>
+    <div id="missing" class="missing" hidden>
+      <section class="dialog">
+        <div class="eyebrow">FLIPPER LAB</div>
+        <h1 id="missing-title">WebGL unavailable</h1>
+        <p id="missing-detail"></p>
+      </section>
+    </div>
+    <noscript>This offline simulator requires JavaScript and WebGL.</noscript>
+    <script src="vendor/three.min.js"></script>
+    <script src="js/core.js"></script>
+    <script src="js/audio.js"></script>
+    <script src="js/screen.js"></script>
+    <script src="js/link.js"></script>
+    <script src="js/flipper-fs.js"></script>
+    <script src="js/flipper-os.js"></script>
+    <script src="js/flipper-tools.js"></script>
+    <script src="js/flipper-apps.js"></script>
+    <script src="js/phone-app.js"></script>
+    <script src="models/library.js"></script>
+    <script src="models/manifest.js"></script>
+    <script src="models/flipper-model.js"></script>
+    <script src="js/models.js"></script>
+    <script src="js/scene.js"></script>
+    <script src="js/icons.js"></script>
+    <script src="js/self-test.js"></script>
+    <script src="js/ui.js"></script>
+  </body>
 </html>

@@ -1,17 +1,4 @@
-/* Fliper Web Sim — flipper-os: JS re-implementation of the Flipper OS shell
-   for a 128×64 monochrome LCD with orange backlight (#FF8200 on #1A0F00).
-   All code and glyphs original.
-   Stage 1: boot, home, pairing, link status.
-   Stage 3: main menu (OK from home/connected) with FILE MANAGER over the
-   virtual SD card (js/flipper-fs.js): browse, view text/images, rename,
-   delete, LCD screenshot capture, storage info.
-   Stage 5: BAD USB is UI-only. It reads tiny original "REM/STRING/ENTER/
-   DELAY" demo scripts from /ext/badusb and plays them back as text on the
-   Flipper's own LCD — it never creates a real keyboard/HID device, never
-   dispatches DOM events, and cannot type into this page or any other
-   application. It is a screen animation, nothing else.
-   Flipper state lives HERE (single source of truth). The phone talks to it
-   only through the RPC bus in link.js. */
+/* Original LCD shell, bitmap font and virtual device. No firmware code. */
 (function () {
   'use strict';
   var FZ = window.FZ;
@@ -21,49 +8,49 @@
 
   /* ---------- hand-coded 5×7 bitmap font (original), rows top→bottom ---------- */
   var GLYPHS = {
-    'A': ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
-    'B': ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
-    'C': ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
-    'D': ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
-    'E': ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
-    'F': ['#####', '#....', '#....', '####.', '#....', '#....', '#....'],
-    'G': ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.###.'],
-    'H': ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
-    'I': ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '#####'],
-    'J': ['..###', '...#.', '...#.', '...#.', '...#.', '#..#.', '.##..'],
-    'K': ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
-    'L': ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
-    'M': ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
-    'N': ['#...#', '##..#', '#.#.#', '#.#.#', '#..##', '#...#', '#...#'],
-    'O': ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
-    'P': ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
-    'Q': ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
-    'R': ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
-    'S': ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
-    'T': ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
-    'U': ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
-    'V': ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
-    'W': ['#...#', '#...#', '#...#', '#.#.#', '#.#.#', '##.##', '#...#'],
-    'X': ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
-    'Y': ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
-    'Z': ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
-    '0': ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
-    '1': ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
-    '2': ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
-    '3': ['####.', '....#', '....#', '.###.', '....#', '....#', '####.'],
-    '4': ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
-    '5': ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
-    '6': ['..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.'],
-    '7': ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
-    '8': ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
-    '9': ['.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..'],
+    A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+    B: ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
+    C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+    D: ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
+    E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+    F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'],
+    G: ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.###.'],
+    H: ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+    I: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '#####'],
+    J: ['..###', '...#.', '...#.', '...#.', '...#.', '#..#.', '.##..'],
+    K: ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
+    L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+    M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
+    N: ['#...#', '##..#', '#.#.#', '#.#.#', '#..##', '#...#', '#...#'],
+    O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+    P: ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+    Q: ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
+    R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+    S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+    T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+    U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+    V: ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
+    W: ['#...#', '#...#', '#...#', '#.#.#', '#.#.#', '##.##', '#...#'],
+    X: ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+    Y: ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+    Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+    0: ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
+    1: ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+    2: ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+    3: ['####.', '....#', '....#', '.###.', '....#', '....#', '####.'],
+    4: ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+    5: ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
+    6: ['..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.'],
+    7: ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
+    8: ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+    9: ['.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..'],
     ' ': ['.....', '.....', '.....', '.....', '.....', '.....', '.....'],
     '.': ['.....', '.....', '.....', '.....', '.....', '.##..', '.##..'],
     ',': ['.....', '.....', '.....', '.....', '.....', '.##..', '.#...'],
     ':': ['.....', '.....', '..#..', '.....', '.....', '..#..', '.....'],
     ';': ['.....', '.....', '..#..', '.....', '.....', '.##..', '.#...'],
     '-': ['.....', '.....', '.....', '#####', '.....', '.....', '.....'],
-    '_': ['.....', '.....', '.....', '.....', '.....', '.....', '#####'],
+    _: ['.....', '.....', '.....', '.....', '.....', '.....', '#####'],
     '/': ['....#', '....#', '...#.', '..#..', '.#...', '#....', '#....'],
     '\\': ['#....', '#....', '.#...', '..#..', '...#.', '....#', '....#'],
     '(': ['...#.', '..#..', '..#..', '..#..', '..#..', '..#..', '...#.'],
@@ -91,10 +78,11 @@
   (function compile() {
     for (var ch in GLYPHS) {
       if (!Object.prototype.hasOwnProperty.call(GLYPHS, ch)) continue;
-      var rows = GLYPHS[ch], cols = [0, 0, 0, 0, 0];
+      var rows = GLYPHS[ch],
+        cols = [0, 0, 0, 0, 0];
       for (var col = 0; col < 5; col++) {
         var bits = 0;
-        for (var row = 0; row < 7; row++) if (rows[row].charAt(col) === '#') bits |= (1 << row);
+        for (var row = 0; row < 7; row++) if (rows[row].charAt(col) === '#') bits |= 1 << row;
         cols[col] = bits;
       }
       FONT[ch] = cols;
@@ -137,909 +125,847 @@
     drawText(c, str, x, y, BG, scale);
   }
 
-  var KEY_LABEL = { up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT', ok: 'OK', back: 'BACK' };
-
-  /* ---------- file-manager helpers (Stage 3) ---------- */
-  /* charset for the rename editor; '\b' is the delete-char sentinel,
-     displayed as '<' (the font is uppercase-only and has no backspace
-     glyph — drawText() uppercases everything anyway). */
-  var CHARSET = 'abcdefghijklmnopqrstuvwxyz0123456789_-().'.split('').concat(['\b']);
-  var ALPHA = 'abcdefghijklmnopqrstuvwxyz0123456789_-().'.split('');
-
-  function dispChar(ch) { return ch === '\b' ? '<' : ch; }
-
-  function cycle(arr, cur, delta) {
-    var i = arr.indexOf(cur);
-    if (i < 0) return arr[delta > 0 ? 0 : arr.length - 1];
-    return arr[(i + delta + arr.length) % arr.length];
+  var menuNames = [
+    'Sub-GHz',
+    '125 kHz RFID',
+    'NFC',
+    'Infrared',
+    'GPIO',
+    'iButton',
+    'Bad USB',
+    'U2F',
+    'Apps',
+    'Settings'
+  ];
+  var stack = [],
+    page,
+    changed = true,
+    lastDraw = -Infinity,
+    nextTick = 0,
+    paired = false,
+    signal = 0,
+    pin = '',
+    screen,
+    bootEnd = 0;
+  var settings,
+    update = null,
+    bootTimer,
+    scanSerial = 0;
+  function cleanSettings(v) {
+    v = v || {};
+    return {
+      keySlot: /^SIM-[0-9A-F]{4}$/.test(v.keySlot) ? v.keySlot : 'SIM-7C2A',
+      name:
+        String(v.name || 'Flipper Zero')
+          .replace(/[^a-zA-Z0-9 _-]/g, '')
+          .trim()
+          .slice(0, 18) || 'Flipper Zero',
+      brightness: FZ.util.clamp(Number(v.brightness) || 100, 25, 100),
+      firmware: v.firmware === '1.1.0-sim' ? '1.1.0-sim' : '1.0.0-sim'
+    };
   }
-
-  function drawTextR(c, str, xRight, y, color, scale) {
-    drawText(c, str, xRight - textWidth(str, scale || 1), y, color, scale);
+  function dirty() {
+    changed = true;
+    if (FZ.scene) FZ.scene.wake();
   }
-
-  function fmtSize(n) {
-    if (n < 1000) return String(n);
-    if (n < 1000000) return (n / 1000).toFixed(1) + 'K';
-    return (n / 1000000).toFixed(1) + 'M';
+  function show(p, replace) {
+    if (!replace && page) stack.push(page);
+    page = p;
+    dirty();
   }
-
-  function trunc(s, max) {
-    s = String(s);
-    return s.length > max ? s.slice(0, max - 1) + '.' : s;
+  function home() {
+    stack = [];
+    page = { id: 'home' };
+    dirty();
   }
-
-  /* ---------- the OS object ---------- */
-  var os = {
-    screen: null,
-    state: 'boot',       /* boot | home | scan | pair | waitconfirm | connected */
-    t0: 0,
-    scanT0: 0,
-    pin: '',
-    retryTimer: 0,
-    lastKey: '-',
-    name: 'Flipper Zero',
-    battery: 87,
-    firmware: '0.99.1-sim',
-    signal: 0,
-    connected: false,
-    dirtyFlag: true,
-
-    /* menu + file manager (Stage 3) */
-    menuSel: 0,
-    menuFrom: 'home',
-    savedPath: '',
-    savedT0: 0,
-    findT0: -1e9,   /* Stage 4: find-my-Flipper flash start time */
-
-    /* Bad USB (Stage 5, UI-only) */
-    badusb: { list: [], sel: 0, scroll: 0 },
-    run: null,      /* {name, steps[], idx, log[], mode, charIdx, t0, delayUntil, done} */
-    fm: {
-      path: '/ext', sel: 0, scroll: 0,
-      viewPath: null, viewLines: [], viewScroll: 0, viewImg: null, viewIsImg: false,
-      act: null,   /* {path, dir, from, sel} */
-      ren: null,   /* {path, buf[], cur, ins, from} */
-      del: null    /* {path, from} */
-    },
-
-    dirty: function () { this.dirtyFlag = true; if (this.screen) this.screen.markDirty(); },
-
-    init: function (screen) {
-      this.screen = screen;
-      this.state = 'boot';
-      this.t0 = FZ.util.now();
-      this.dirtyFlag = true;
-      var self = this;
-
-      FZ.link.attach('flipper', {
-        'link.scan': function (p, reply) {
-          if (self.state === 'boot') self.state = 'home';
-          self.state = 'scan';
-          self.scanT0 = FZ.util.now();
-          self.dirty();
-          setTimeout(function () {
-            reply(null, { devices: [{ id: 'fz-sim-1', name: self.name, rssi: -45 }] });
-          }, 650);
-        },
-        'link.pair.request': function (p, reply) {
-          if (self.connected) { reply('already connected', null); return; }
-          self.pin = String(FZ.util.randInt(100000, 999999));
-          self.state = 'pair';
-          self.dirty();
-          reply(null, { pin: self.pin, name: self.name });
-        },
-        'link.pair.abort': function (p, reply) {
-          clearTimeout(self.retryTimer);
-          if (self.state === 'pair' || self.state === 'waitconfirm') { self.state = 'home'; self.dirty(); }
-          reply(null, { ok: true });
-        },
-        'link.disconnect': function (p, reply) {
-          reply(null, { ok: true });
-          if (self.connected) FZ.link.establish({ connected: false, name: self.name });
-        },
-        'link.status': function (p) {
-          self.connected = !!p.connected;
-          if (p.connected) {
-            self.state = 'connected';
-            clearTimeout(self.retryTimer);
-          } else if (self.state !== 'boot') {
-            self.state = 'home';
-          }
-          self.pin = '';
-          self.dirty();
-        },
-        'link.signal': function (p) {
-          self.signal = p.signal | 0;
-          self.dirty();
-        },
-        'system.info': function (p, reply) {
-          var used = 41.3 + (FZ.fs ? FZ.fs.usedMB() : 0);
-          reply(null, {
-            name: self.name,
-            battery: self.battery,
-            firmware: self.firmware,
-            storage: { usedMB: Math.round(used * 10) / 10, totalMB: 128 }
-          });
-        },
-        'system.ping': function (p, reply) {
-          reply(null, { t: (p && p.t) || 0 });
-        },
-
-        /* ---------- Stage 4: phone Storage screen over RPC ---------- */
-        'fs.list': function (p, reply) {
-          if (!FZ.fs) { reply('fs unavailable', null); return; }
-          var path = FZ.fs.normalize(p && p.path);
-          reply(null, { path: path, entries: FZ.fs.list(path) });
-        },
-        'fs.read': function (p, reply) {
-          if (!FZ.fs) { reply('fs unavailable', null); return; }
-          var path = FZ.fs.normalize(p && p.path);
-          var data = FZ.fs.read(path);
-          if (data === null) { reply('not found', null); return; }
-          reply(null, { path: path, data: data });
-        },
-        'fs.rename': function (p, reply) {
-          if (!FZ.fs) { reply('fs unavailable', null); return; }
-          var path = FZ.fs.rename(p && p.path, p && p.name);
-          if (!path) { reply('rename failed', null); return; }
-          reply(null, { path: path });
-        },
-        'fs.remove': function (p, reply) {
-          if (!FZ.fs) { reply('fs unavailable', null); return; }
-          var path = FZ.fs.remove(p && p.path);
-          if (!path) { reply('remove failed', null); return; }
-          reply(null, { path: path });
-        },
-        'fs.stats': function (p, reply) {
-          if (!FZ.fs) { reply('fs unavailable', null); return; }
-          reply(null, FZ.fs.stats());
-        },
-
-        /* ---------- Stage 4: find-my-Flipper ---------- */
-        'find.flipper': function (p, reply) {
-          self.findT0 = FZ.util.now();
-          self.dirty();
-          FZ.audio.alarm();
-          reply(null, { ok: true });
+  function back() {
+    page = stack.pop() || { id: 'home' };
+    dirty();
+  }
+  function boot() {
+    stack = [];
+    page = { id: 'boot' };
+    bootEnd = FZ.util.now() + 870;
+    FZ.audio.boot();
+    dirty();
+  }
+  function list(id, title, get, select) {
+    show({ id: id, title: title, rows: get, select: select, sel: 0 });
+  }
+  function note(title, lines) {
+    show({ id: 'note', title: title, lines: lines });
+  }
+  function saveSettings() {
+    FZ.storage.set('device', settings);
+    if (paired) FZ.link.event('flipper', 'system.changed', info());
+    dirty();
+  }
+  function info() {
+    return {
+      name: settings.name,
+      battery: 87,
+      firmware: settings.firmware,
+      storage: storageInfo()
+    };
+  }
+  function storageInfo() {
+    var stats = FZ.fs.stats();
+    return {
+      usedMB: FZ.fs.usedMB(),
+      bytes: FZ.fs.usedBytes(),
+      totalMB: 128,
+      files: stats.files,
+      dirs: stats.dirs
+    };
+  }
+  function rename(name) {
+    name = String(name || '').trim();
+    if (!/^[a-zA-Z0-9 _-]{1,18}$/.test(name))
+      throw Error('Use 1–18 letters, digits, spaces, _ or -');
+    settings.name = name;
+    if (paired) FZ.link.rename(name);
+    saveSettings();
+    FZ.note('Device renamed to ' + name);
+  }
+  function editor(title, value, commit, max) {
+    show({ id: 'editor', title: title, value: value, cursor: 0, commit: commit, max: max || 32 });
+  }
+  function settingsMenu() {
+    list(
+      'settings',
+      'Settings',
+      function () {
+        return [
+          'Device name',
+          'Brightness: ' + settings.brightness + '%',
+          'Sound: ' + (FZ.audio.enabled ? 'on' : 'off'),
+          'About / firmware'
+        ];
+      },
+      function (i) {
+        if (!i) editor('Device name', settings.name, rename, 18);
+        if (i === 1) {
+          settings.brightness = settings.brightness >= 100 ? 25 : settings.brightness + 25;
+          saveSettings();
         }
-      });
-
-      /* redraw the file UI if the SD card changes underneath it, and tell
-         the phone so its Storage screen can refresh within ~1 s (Stage 4).
-         Every mutation — whether it came from the on-device file manager or
-         from a phone RPC handler above — flows through FZ.fs, so this one
-         subscription is the single sync point for both UIs. */
-      if (FZ.fs) {
-        FZ.fs.subscribe(function (op) {
-          var s = self.state;
-          if (s === 'fm' || s === 'fmview' || s === 'fmact' ||
-              s === 'fmren' || s === 'fmdel' || s === 'storage') self.dirty();
-          FZ.link.event('flipper', 'fs.changed', { op: op });
+        if (i === 2) {
+          FZ.audio.setEnabled(!FZ.audio.enabled);
+          FZ.emit('sound');
+        }
+        if (i === 3)
+          note('Device info', [
+            'FLIPPER ZERO',
+            'HW F7B9C6',
+            'FW ' + settings.firmware,
+            'JS SIMULATOR'
+          ]);
+      }
+    );
+  }
+  function mainMenu() {
+    list(
+      'menu',
+      'Main menu',
+      function () {
+        return menuNames;
+      },
+      function (i) {
+        if (i === 9) settingsMenu();
+        else if (i === 8) appsMenu();
+        else FZ.tools.open(i);
+      }
+    );
+  }
+  function capture() {
+    var path = '/ext/screenshots/lcd-' + Date.now() + '.png';
+    FZ.fs.write(path, screen.canvas.toDataURL('image/png'));
+    note('Screen saved', ['/EXT/SCREENSHOTS', 'LCD CAPTURE SAVED']);
+  }
+  function appsMenu() {
+    list(
+      'apps',
+      'Applications',
+      function () {
+        return [
+          'Archive',
+          'File manager',
+          'Clock',
+          'Hex viewer',
+          'Music player',
+          'Screenshot',
+          'Storage info'
+        ];
+      },
+      function (i) {
+        if (i === 0 || i === 1) browser('/ext', i === 0 ? 'Archive' : 'File manager');
+        else if (i === 5) capture();
+        else if (i === 6) {
+          var v = storageInfo();
+          note('Virtual SD', [
+            v.bytes + ' BYTES USED',
+            v.files + ' FILES',
+            v.totalMB + ' MB CAPACITY'
+          ]);
+        } else FZ.mini.open(i);
+      }
+    );
+  }
+  function entries(p) {
+    return FZ.fs.list(p.path);
+  }
+  function browser(path, title) {
+    show({
+      id: 'browser',
+      title: title || path.split('/').pop(),
+      path: path,
+      sel: 0,
+      rows: function () {
+        return entries(this).map(function (e) {
+          return (e.dir ? '+ ' : '  ') + e.name;
         });
-      }
-
-      FZ.audio.boot();
-    },
-
-    /* ---------- input from 3D buttons / keyboard ---------- */
-    onKey: function (k) {
-      if (this.state === 'boot') { this.state = 'home'; this.dirty(); return; }
-      if (this.state === 'pair') {
-        if (k === 'ok') {
-          FZ.link.event('flipper', 'link.pair.confirm', { pin: this.pin });
-          this.state = 'waitconfirm';
-          this.dirty();
-          var self = this;
-          clearTimeout(this.retryTimer);
-          this.retryTimer = setTimeout(function () {
-            if (self.state === 'waitconfirm') {
-              FZ.link.event('flipper', 'link.pair.retry', { pin: self.pin });
-              self.state = 'pair';
-              self.dirty();
-            }
-          }, 2500);
-        } else if (k === 'back') {
-          clearTimeout(this.retryTimer);
-          FZ.link.event('flipper', 'link.pair.cancel', { pin: this.pin });
-          this.state = 'home';
-          this.dirty();
-        }
-        return;
-      }
-      this.lastKey = KEY_LABEL[k] || String(k).toUpperCase();
-
-      /* OK from home/connected opens the main menu (Stage 3) */
-      if ((this.state === 'home' || this.state === 'connected') && k === 'ok') {
-        this.menuFrom = this.state;
-        this.menuSel = 0;
-        this.state = 'menu';
-        this.dirty();
-        return;
-      }
-
-      switch (this.state) {
-        case 'menu': this.keyMenu(k); break;
-        case 'fm': this.keyFm(k); break;
-        case 'fmview': this.keyFmView(k); break;
-        case 'fmact': this.keyFmAct(k); break;
-        case 'fmren': this.keyFmRen(k); break;
-        case 'fmdel': this.keyFmDel(k); break;
-        case 'fmsaved': this.state = 'menu'; this.menuSel = 0; break;
-        case 'storage': if (k === 'back') { this.state = 'menu'; } break;
-        case 'badusb': this.keyBadUsb(k); break;
-        case 'badusbrun': this.keyBadUsbRun(k); break;
-        default: break;
-      }
-      this.dirty();
-    },
-
-    /* ---------- menu / file-manager input (Stage 3) ---------- */
-    keyMenu: function (k) {
-      var N = 4;
-      if (k === 'up') this.menuSel = (this.menuSel + N - 1) % N;
-      else if (k === 'down') this.menuSel = (this.menuSel + 1) % N;
-      else if (k === 'back') this.state = this.menuFrom;
-      else if (k === 'ok') {
-        if (this.menuSel === 0) { this.openFm('/ext'); this.state = 'fm'; }
-        else if (this.menuSel === 1) this.capture();
-        else if (this.menuSel === 2) this.state = 'storage';
-        else this.openBadUsb();
-      }
-    },
-
-    /* ---------- Bad USB: UI-only script playback (Stage 5) ---------- */
-    openBadUsb: function () {
-      var entries = FZ.fs ? FZ.fs.list('/ext/badusb') : [];
-      this.badusb.list = entries.filter(function (e) { return !e.dir; });
-      this.badusb.sel = 0;
-      this.badusb.scroll = 0;
-      this.state = 'badusb';
-    },
-
-    keyBadUsb: function (k) {
-      var b = this.badusb, n = b.list.length;
-      if (k === 'up') { if (b.sel > 0) b.sel--; }
-      else if (k === 'down') { if (b.sel < n - 1) b.sel++; }
-      else if (k === 'back') { this.state = 'menu'; this.menuSel = 3; }
-      else if (k === 'ok') { if (b.list[b.sel]) this.startBadUsb(b.list[b.sel]); }
-      if (b.sel < b.scroll) b.scroll = b.sel;
-      if (b.sel > b.scroll + 5) b.scroll = b.sel - 5;
-    },
-
-    /* Parse a tiny original script format: one instruction per line.
-         REM <text>      comment, shown but never "typed"
-         STRING <text>   types the text out on the LCD, character by character
-         ENTER           shows a return glyph and starts a new output line
-         DELAY <ms>      pauses, showing a countdown
-       Anything else is shown verbatim as a comment-like line. This is a
-       screen animation only — no key events are ever dispatched anywhere. */
-    parseBadUsb: function (text) {
-      var lines = String(text).split('\n');
-      var steps = [];
-      for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        var trimmed = line.replace(/^\s+/, '');
-        if (!trimmed) continue;
-        var sp = trimmed.indexOf(' ');
-        var word = sp < 0 ? trimmed : trimmed.slice(0, sp);
-        var rest = sp < 0 ? '' : trimmed.slice(sp + 1);
-        var up = word.toUpperCase();
-        if (up === 'REM') steps.push({ type: 'rem', text: rest });
-        else if (up === 'STRING') steps.push({ type: 'string', text: rest });
-        else if (up === 'ENTER') steps.push({ type: 'enter', text: '' });
-        else if (up === 'DELAY') steps.push({ type: 'delay', ms: Math.max(0, parseInt(rest, 10) || 0) });
-        else steps.push({ type: 'rem', text: trimmed });
-      }
-      return steps;
-    },
-
-    startBadUsb: function (entry) {
-      var data = FZ.fs ? FZ.fs.read(entry.path) : null;
-      var steps = this.parseBadUsb(data || '');
-      this.run = {
-        name: entry.name, steps: steps, idx: 0, log: [''], lineBase: '',
-        mode: steps.length ? 'start' : 'done', done: !steps.length, charIdx: 0, t0: FZ.util.now()
-      };
-      this.state = 'badusbrun';
-    },
-
-    keyBadUsbRun: function (k) {
-      var r = this.run;
-      if (!r) { this.state = 'badusb'; return; }
-      if (k === 'back') { this.state = 'badusb'; this.run = null; return; }
-      if (k === 'ok' && !r.done) {
-        /* OK always fast-forwards: finish whatever step is in progress
-           instantly, regardless of its type */
-        var step = r.steps[r.idx];
-        if (step && step.type === 'string') r.charIdx = step.text.length;
-        if (step) this.finishStep();
-      }
-    },
-
-    finishStep: function () {
-      var r = this.run;
-      var step = r.steps[r.idx];
-      if (step) {
-        if (step.type === 'string') r.log[r.log.length - 1] = r.lineBase + step.text;
-        else if (step.type === 'enter') r.log.push('');
-        /* rem and delay produce no visible terminal text */
-      }
-      r.idx++;
-      r.charIdx = 0;
-      r.t0 = FZ.util.now();
-      if (r.idx >= r.steps.length) { r.mode = 'done'; r.done = true; }
-      else { r.mode = 'start'; r.lineBase = r.log[r.log.length - 1]; }
-    },
-
-    /* advances Bad USB playback; called from tick() every frame. This only
-       mutates the Flipper's own screen state (r.log / dirty flag) — nothing
-       here ever touches the DOM, the keyboard, or any other application. */
-    tickBadUsb: function (now) {
-      var r = this.run;
-      if (!r || r.done) return;
-      var step = r.steps[r.idx];
-      if (!step) { r.mode = 'done'; r.done = true; return; }
-      this.dirtyFlag = true;
-      if (step.type === 'rem') {
-        if (now - r.t0 > 650) this.finishStep();
-      } else if (step.type === 'enter') {
-        if (now - r.t0 > 200) this.finishStep();
-      } else if (step.type === 'delay') {
-        if (now - r.t0 > Math.max(150, step.ms)) this.finishStep();
-      } else if (step.type === 'string') {
-        var CPS = 28; /* simulated "typing" speed, chars/sec */
-        var want = Math.min(step.text.length, Math.floor((now - r.t0) / (1000 / CPS)));
-        r.charIdx = want;
-        r.log[r.log.length - 1] = r.lineBase + step.text.slice(0, want);
-        if (want >= step.text.length) this.finishStep();
-      }
-    },
-
-    openFm: function (path) {
-      this.fm.path = path;
-      this.fm.sel = 0;
-      this.fm.scroll = 0;
-    },
-
-    fmList: function () {
-      return (FZ.fs ? FZ.fs.list(this.fm.path) : []);
-    },
-
-    fmClamp: function () {
-      var f = this.fm;
-      var n = this.fmList().length;
-      if (f.sel >= n) f.sel = Math.max(0, n - 1);
-      if (f.sel < 0) f.sel = 0;
-      if (f.sel < f.scroll) f.scroll = f.sel;
-      if (f.sel > f.scroll + 5) f.scroll = f.sel - 5;
-      if (f.scroll < 0) f.scroll = 0;
-      if (f.scroll > Math.max(0, n - 6)) f.scroll = Math.max(0, n - 6);
-    },
-
-    fmUp: function () {
-      if (this.fm.path === '/ext' || this.fm.path === '/') return;
-      var p = this.fm.path.split('/');
-      p.pop();
-      this.openFm(p.join('/') || '/ext');
-    },
-
-    keyFm: function (k) {
-      var list = this.fmList();
-      var n = list.length;
-      if (k === 'up') { if (this.fm.sel > 0) this.fm.sel--; }
-      else if (k === 'down') { if (this.fm.sel < n - 1) this.fm.sel++; }
-      else if (k === 'ok') {
-        var e = list[this.fm.sel];
-        if (!e) return;
-        if (e.dir) this.openFm(e.path);
-        else this.openView(e.path);
-      } else if (k === 'right') {
-        var e2 = list[this.fm.sel];
-        if (e2) {
-          this.fm.act = { path: e2.path, dir: e2.dir, from: 'fm', sel: 0 };
-          this.state = 'fmact';
-        }
-      } else if (k === 'left') {
-        this.fmUp();
-      } else if (k === 'back') {
-        if (this.fm.path !== '/ext') this.fmUp();
-        else { this.state = 'menu'; this.menuSel = 0; }
-      }
-      this.fmClamp();
-    },
-
-    openView: function (path) {
-      var data = FZ.fs ? FZ.fs.read(path) : null;
-      var f = this.fm;
-      f.viewPath = path;
-      f.viewScroll = 0;
-      f.viewImg = null;
-      f.viewIsImg = !!(data && String(data).indexOf('data:image/') === 0);
-      f.viewLines = data === null ? ['(UNREADABLE)'] : String(data).split('\n');
-      if (f.viewIsImg && typeof Image !== 'undefined') {
-        var self = this;
-        var img = new Image();
-        img.onload = function () { self.fm.viewImg = img; self.dirty(); };
-        img.src = String(data);
-      }
-      this.state = 'fmview';
-    },
-
-    keyFmView: function (k) {
-      var f = this.fm;
-      if (k === 'up' && !f.viewIsImg) {
-        if (f.viewScroll > 0) f.viewScroll--;
-      } else if (k === 'down' && !f.viewIsImg) {
-        if (f.viewScroll < Math.max(0, f.viewLines.length - 6)) f.viewScroll++;
-      } else if (k === 'ok') {
-        f.act = { path: f.viewPath, dir: false, from: 'fmview', sel: 0 };
-        this.state = 'fmact';
-      } else if (k === 'back') {
-        this.state = 'fm';
-      }
-    },
-
-    keyFmAct: function (k) {
-      var a = this.fm.act;
-      if (!a) { this.state = 'fm'; return; }
-      if (k === 'up') a.sel = (a.sel + 2) % 3;
-      else if (k === 'down') a.sel = (a.sel + 1) % 3;
-      else if (k === 'back') this.state = a.from;
-      else if (k === 'ok') {
-        if (a.sel === 0) this.startRen(a);
-        else if (a.sel === 1) { this.fm.del = { path: a.path, from: a.from }; this.state = 'fmdel'; }
-        else this.state = a.from;
-      }
-    },
-
-    startRen: function (a) {
-      /* The editor's charset is lowercase-only (a-z0-9_-().); names are
-         lowercased on entry so the U/D cycle always starts from a known
-         position. Display is uppercase regardless (font has no lowercase
-         glyphs), so this is invisible on the LCD. */
-      var name = a.path.split('/').pop().toLowerCase();
-      this.fm.ren = { path: a.path, buf: name.split(''), cur: 0, ins: 'a', from: a.from };
-      this.state = 'fmren';
-    },
-
-    keyFmRen: function (k) {
-      var r = this.fm.ren;
-      if (!r) { this.state = 'fm'; return; }
-      if (k === 'left') { if (r.cur > 0) r.cur--; }
-      else if (k === 'right') { if (r.cur < r.buf.length) r.cur++; }
-      else if (k === 'up' || k === 'down') {
-        var d = k === 'up' ? 1 : -1;
-        if (r.cur < r.buf.length) r.buf[r.cur] = cycle(CHARSET, r.buf[r.cur], d);
-        else r.ins = cycle(ALPHA, r.ins, d);
-      } else if (k === 'back') {
-        this.state = r.from;
-      } else if (k === 'ok') {
-        if (r.cur < r.buf.length) {
-          if (r.buf[r.cur] === '\b') {
-            r.buf.splice(r.cur, 1);
-            if (r.cur > r.buf.length) r.cur = r.buf.length;
-            FZ.audio.click();
-          } else {
-            this.commitRen();
-          }
-        } else {
-          if (r.buf.length >= 18) { FZ.audio.err(); return; }
-          r.buf.push(r.ins);
-          r.cur = r.buf.length - 1;
-          FZ.audio.click();
+      },
+      select: function (i) {
+        var e = entries(this)[i];
+        if (e) {
+          if (e.dir) browser(e.path);
+          else reader(e.path);
         }
       }
-    },
-
-    commitRen: function () {
-      var r = this.fm.ren;
-      var name = r.buf.join('');
-      var newPath = FZ.fs ? FZ.fs.rename(r.path, name) : null;
-      if (!newPath) { FZ.audio.err(); return; }
-      FZ.audio.ok();
-      if (r.from === 'fmview') {
-        this.openView(newPath);
-        this.state = 'fmview';
-      } else {
-        this.state = 'fm';
-        var list = this.fmList();
-        for (var i = 0; i < list.length; i++) {
-          if (list[i].path === newPath) { this.fm.sel = i; break; }
-        }
-        this.fmClamp();
-      }
-    },
-
-    keyFmDel: function (k) {
-      var d = this.fm.del;
-      if (!d) { this.state = 'fm'; return; }
-      if (k === 'back') { this.state = d.from; return; }
-      if (k === 'ok') {
-        var ok = FZ.fs ? FZ.fs.remove(d.path) : null;
-        this.state = d.from;
-        if (!ok) FZ.audio.err();
-        else FZ.audio.beep(330, 0.08, 0.08);
-        if (d.from === 'fm') this.fmClamp();
-      }
-    },
-
-    capture: function () {
-      var s = this.screen;
-      var url = '';
-      try { url = s.canvas.toDataURL('image/png'); } catch (e) { url = ''; }
-      if (!url) { FZ.audio.err(); this.state = 'menu'; return; }
-      var d = new Date();
-      var name = 'lcd-' + d.getFullYear() +
-        FZ.util.pad2(d.getMonth() + 1) + FZ.util.pad2(d.getDate()) +
-        '-' + FZ.util.pad2(d.getHours()) + FZ.util.pad2(d.getMinutes()) +
-        FZ.util.pad2(d.getSeconds()) + '.png';
-      var path = FZ.fs ? FZ.fs.write('/ext/screenshots/' + name, url) : null;
-      if (!path) { FZ.audio.err(); this.state = 'menu'; return; }
-      this.savedPath = path;
-      this.savedT0 = FZ.util.now();
-      this.state = 'fmsaved';
-      FZ.audio.ok();
-    },
-
-    /* ---------- per-frame ---------- */
-    tick: function (now) {
-      if (this.state === 'boot') {
-        this.dirtyFlag = true;
-        if (now - this.t0 > 1300) { this.state = 'home'; this.dirtyFlag = true; }
-      }
-      if (this.state === 'scan') {
-        this.dirtyFlag = true; /* animated dots */
-        if (now - this.scanT0 > 6000) { this.state = 'home'; }
-      }
-      if (this.state === 'fmsaved' && now - this.savedT0 > 2500) {
-        this.state = 'menu';
-        this.menuSel = 0;
-        this.dirtyFlag = true;
-      }
-      if (now - this.findT0 < 3000) this.dirtyFlag = true; /* keep the find-me flash animating */
-      if (this.state === 'badusbrun') this.tickBadUsb(now);
-      if (this.dirtyFlag) { this.draw(now); this.dirtyFlag = false; }
-    },
-
-    /* ---------- rendering (logical 128×64) ---------- */
-    draw: function (now) {
-      var s = this.screen;
-      if (!s) return;
-      var c = s.begin();
-
-      /* find-my-Flipper: a few seconds of inverted flashing LCD, overriding
-         whatever screen is currently shown (Stage 4) */
-      var findAge = now - this.findT0;
-      if (findAge < 3000) {
-        var on = Math.floor(findAge / 220) % 2 === 0;
-        var txtColor = on ? BG : FG;
-        c.fillStyle = on ? FG : BG;
-        c.fillRect(0, 0, 128, 64);
-        drawTextC(c, 'FIND MY', 20, txtColor, 2);
-        drawTextC(c, 'FLIPPER', 38, txtColor, 2);
-        drawTextC(c, 'HERE I AM', 56, txtColor);
-        s.markDirty();
-        return;
-      }
-
-      c.fillStyle = BG;
-      c.fillRect(0, 0, 128, 64);
-
-      if (this.state === 'boot') {
-        this.drawBoot(now);
-      } else {
-        this.drawStatus(c);
-        switch (this.state) {
-          case 'scan': this.drawScan(c, now); break;
-          case 'pair': this.drawPair(c); break;
-          case 'waitconfirm': this.drawWait(c); break;
-          case 'connected': this.drawConnected(c); break;
-          case 'menu': this.drawMenu(c); break;
-          case 'fm': this.drawFm(c); break;
-          case 'fmview': this.drawFmView(c); break;
-          case 'fmact': this.drawFmAct(c); break;
-          case 'fmren': this.drawFmRen(c); break;
-          case 'fmdel': this.drawFmDel(c); break;
-          case 'fmsaved': this.drawSaved(c); break;
-          case 'storage': this.drawStorage(c); break;
-          case 'badusb': this.drawBadUsb(c); break;
-          case 'badusbrun': this.drawBadUsbRun(c); break;
-          default: this.drawHome(c); break;
-        }
-      }
-
-      /* faint pixel grid (drawn in device pixels) */
-      c.setTransform(1, 0, 0, 1, 0, 0);
-      c.fillStyle = 'rgba(0,0,0,0.055)';
-      var w = s.canvas.width, h = s.canvas.height, i;
-      for (i = 1; i < w; i += 2) c.fillRect(i, 0, 1, h);
-      for (i = 1; i < h; i += 2) c.fillRect(0, i, w, 1);
-
-      s.markDirty();
-    },
-
-    drawBoot: function (now) {
-      var s = this.screen, c = s.ctx;
-      c.setTransform(s.scale, 0, 0, s.scale, 0, 0);
-      var p = FZ.util.clamp((now - this.t0) / 1100, 0, 1);
-      invBoxC(c, 'FLIPPER SIM', 14);
-      drawTextC(c, 'FAN PROJECT', 30);
-      /* progress bar */
-      c.strokeStyle = FG;
-      c.lineWidth = 1;
-      c.strokeRect(4.5, 44.5, 119, 9);
-      c.fillStyle = FG;
-      c.fillRect(6, 46, Math.round(116 * p), 6);
-      drawTextC(c, Math.round(p * 100) + '%', 56);
-    },
-
-    drawStatus: function (c) {
-      /* battery: icon + percent */
-      c.strokeStyle = FG;
-      c.lineWidth = 1;
-      c.strokeRect(2.5, 1.5, 13, 7);
-      c.fillStyle = FG;
-      c.fillRect(16, 3.5, 1, 3);
-      var pct = this.battery / 100;
-      c.fillRect(4, 3, Math.round(10 * pct), 5);
-      drawText(c, String(this.battery), 19, 1);
-
-      /* link bars (right) */
-      var i, hgt, x;
-      for (i = 0; i < 4; i++) {
-        hgt = 2 + i * 2;
-        x = 106 + i * 5;
-        if (this.connected && i < this.signal) {
-          c.fillStyle = FG;
-          c.fillRect(x, 8 - hgt, 3, hgt);
-        } else {
-          c.strokeStyle = FG;
-          c.lineWidth = 1;
-          c.strokeRect(x + 0.5, 8.5 - hgt, 2, hgt - 1);
-        }
-      }
-    },
-
-    drawHome: function (c) {
-      invBoxC(c, 'FLIPPER SIM', 14);
-      drawTextC(c, 'KEY: ' + this.lastKey, 30);
-      drawTextC(c, 'OK=MENU PHONE=PAIR', 42);
-      drawTextC(c, 'SIMULATION ONLY', 54);
-    },
-
-    drawScan: function (c, now) {
-      invBoxC(c, 'BT SCANNING', 18);
-      var dots = '.'.repeat(1 + (Math.floor(now / 250) % 3));
-      drawTextC(c, 'SEARCH' + dots, 36);
-      drawTextC(c, 'NO REAL RADIO', 50);
-    },
-
-    drawPair: function (c) {
-      invBoxC(c, 'PAIRING', 12);
-      drawTextC(c, 'PIN', 22);
-      drawTextC(c, this.pin, 32, FG, 2);
-      drawTextC(c, 'OK=PAIR', 50);
-      drawTextC(c, 'BACK=CANCEL', 58 - 4);
-    },
-
-    drawWait: function (c) {
-      invBoxC(c, 'CONFIRMING', 14);
-      drawTextC(c, 'PIN ' + this.pin, 30);
-      drawTextC(c, 'KEEP PHONE NEAR', 44);
-      drawTextC(c, 'RETRY IN 2S', 56 - 4);
-    },
-
-    drawConnected: function (c) {
-      invBoxC(c, 'CONNECTED', 12);
-      var nm = this.name.toUpperCase();
-      if (nm.length > 14) nm = nm.slice(0, 14);
-      drawTextC(c, nm, 30);
-      drawTextC(c, 'OK=MENU  RPC SIM', 44);
-      drawTextC(c, 'ARCHIVE READY', 56);
-    },
-
-    /* ---------- menu / file-manager rendering (Stage 3) ---------- */
-    drawMenu: function (c) {
-      invBoxC(c, 'MENU', 10);
-      var items = ['FILE MANAGER', 'SCREENSHOT', 'STORAGE', 'BAD USB'];
-      for (var i = 0; i < items.length; i++) {
-        var y = 20 + i * 9;
-        if (i === this.menuSel) {
-          c.fillStyle = FG;
-          c.fillRect(6, y - 2, 116, 10);
-          drawText(c, items[i], 10, y, BG);
-        } else {
-          drawText(c, items[i], 10, y, FG);
-        }
-      }
-      drawTextC(c, 'OK SELECT BACK HOME', 56);
-    },
-
-    drawFm: function (c) {
-      var list = this.fmList();
-      var n = list.length;
-      var p = this.fm.path;
-      drawText(c, trunc(p, 14), 4, 11);
-      drawTextR(c, n ? (this.fm.sel + 1) + '/' + n : '-', 124, 11);
-      if (!n) {
-        drawTextC(c, 'EMPTY - BACK=UP', 36);
-        return;
-      }
-      for (var i = 0; i < 6; i++) {
-        var idx = this.fm.scroll + i;
-        if (idx >= n) break;
-        var e = list[idx];
-        var y = 19 + i * 7;
-        var nm = e.dir ? e.name + '/' : e.name;
-        nm = trunc(nm, 15);
-        var sz = e.dir ? '' : fmtSize(e.size);
-        if (idx === this.fm.sel) {
-          c.fillStyle = FG;
-          c.fillRect(4, y - 1, 120, 8);
-          drawText(c, nm, 6, y, BG);
-          if (sz) drawTextR(c, sz, 122, y, BG);
-        } else {
-          drawText(c, nm, 6, y, FG);
-          if (sz) drawTextR(c, sz, 122, y, FG);
-        }
-      }
-    },
-
-    drawFmView: function (c) {
-      var f = this.fm;
-      if (!f.viewPath) { drawTextC(c, 'NO FILE OPEN', 32); return; }
-      drawText(c, trunc(f.viewPath.split('/').pop(), 18), 4, 11);
-      if (f.viewIsImg) {
-        drawTextR(c, 'IMG', 124, 11);
-        if (f.viewImg) {
-          var iw = f.viewImg.naturalWidth || 256;
-          var ih = f.viewImg.naturalHeight || 128;
-          var sc = Math.min(120 / iw, 42 / ih);
-          var w = Math.max(1, Math.round(iw * sc));
-          var h = Math.max(1, Math.round(ih * sc));
-          try { c.drawImage(f.viewImg, Math.round((128 - w) / 2), 18, w, h); } catch (e) {}
-        } else {
-          drawTextC(c, 'LOADING...', 36);
-        }
-        return;
-      }
-      var lines = f.viewLines;
-      for (var i = 0; i < 6; i++) {
-        var li = f.viewScroll + i;
-        if (li >= lines.length) break;
-        drawText(c, trunc(lines[li], 21), 4, 19 + i * 7);
-      }
-    },
-
-    drawFmAct: function (c) {
-      invBoxC(c, 'ACTIONS', 12);
-      var items = ['RENAME', 'DELETE', 'CANCEL'];
-      var sel = this.fm.act ? this.fm.act.sel : 0;
-      for (var i = 0; i < items.length; i++) {
-        var y = 24 + i * 10;
-        if (i === sel) {
-          c.fillStyle = FG;
-          c.fillRect(16, y - 2, 96, 10);
-          drawText(c, items[i], 22, y, BG);
-        } else {
-          drawText(c, items[i], 22, y, FG);
-        }
-      }
-      drawTextC(c, 'OK SELECT BACK=RET', 56);
-    },
-
-    drawFmRen: function (c) {
-      var r = this.fm.ren;
-      if (!r) return;
-      invBoxC(c, 'RENAME', 12);
-      drawText(c, 'NEW NAME:', 4, 24);
-      var x = 4, i;
-      for (i = 0; i < r.buf.length; i++) {
-        var ch = dispChar(r.buf[i]);
-        if (i === r.cur) {
-          c.fillStyle = FG;
-          c.fillRect(x - 1, 31, 7, 9);
-          drawText(c, ch, x, 32, BG);
-        } else {
-          drawText(c, ch, x, 32, FG);
-        }
-        x += 6;
-      }
-      if (r.cur >= r.buf.length) {
-        c.fillStyle = FG;
-        c.fillRect(x - 1, 31, 7, 9);
-        drawText(c, dispChar(r.ins), x, 32, BG);
-      }
-      drawText(c, 'L/R MOVE U/D CHAR', 4, 44);
-      var hint;
-      if (r.cur < r.buf.length && r.buf[r.cur] === '\b') hint = 'OK=DEL';
-      else if (r.cur >= r.buf.length) hint = 'OK=INS';
-      else hint = 'OK=SAVE';
-      drawText(c, hint, 4, 52);
-      drawTextR(c, 'CANCEL', 124, 52);
-    },
-
-    drawFmDel: function (c) {
-      var d = this.fm.del;
-      if (!d) return;
-      invBoxC(c, 'DELETE?', 12);
-      drawTextC(c, trunc(d.path.split('/').pop(), 20), 30);
-      drawTextC(c, 'CANNOT BE UNDONE', 42);
-      drawTextC(c, 'OK=YES BACK=NO', 56);
-    },
-
-    drawSaved: function (c) {
-      invBoxC(c, 'SAVED TO SD', 14);
-      drawTextC(c, trunc(this.savedPath.split('/').pop(), 20), 32);
-      drawTextC(c, '/EXT/SCREENSHOTS', 44);
-      drawTextC(c, 'OK=MENU', 56);
-    },
-
-    drawStorage: function (c) {
-      invBoxC(c, 'STORAGE', 12);
-      var used = 41.3 + (FZ.fs ? FZ.fs.usedMB() : 0);
-      var st = FZ.fs ? FZ.fs.stats() : { files: 0, dirs: 0 };
-      drawText(c, 'SD CARD (VIRTUAL)', 4, 26);
-      drawText(c, 'USED ' + used.toFixed(1) + ' MB', 4, 36);
-      drawText(c, 'FREE ' + Math.max(0, 128 - used).toFixed(1) + ' MB', 4, 46);
-      drawText(c, 'FILES ' + st.files + ' DIRS ' + st.dirs, 4, 56);
-    },
-
-    /* ---------- Bad USB rendering (Stage 5, UI-only) ---------- */
-    drawBadUsb: function (c) {
-      var b = this.badusb;
-      drawText(c, 'BAD USB', 4, 11);
-      drawTextR(c, b.list.length ? (b.sel + 1) + '/' + b.list.length : '-', 124, 11);
-      if (!b.list.length) {
-        drawTextC(c, 'NO SCRIPTS FOUND', 32);
-        drawTextC(c, 'ADD TO /EXT/BADUSB', 44);
-        return;
-      }
-      for (var i = 0; i < 6; i++) {
-        var idx = b.scroll + i;
-        if (idx >= b.list.length) break;
-        var e = b.list[idx];
-        var y = 19 + i * 7;
-        if (idx === b.sel) {
-          c.fillStyle = FG;
-          c.fillRect(4, y - 1, 120, 8);
-          drawText(c, trunc(e.name, 20), 6, y, BG);
-        } else {
-          drawText(c, trunc(e.name, 20), 6, y, FG);
-        }
-      }
-    },
-
-    drawBadUsbRun: function (c) {
-      var r = this.run;
-      if (!r) { drawTextC(c, 'NO SCRIPT', 32); return; }
-      drawText(c, trunc(r.name, 14), 4, 10);
-      drawTextR(c, (Math.min(r.idx + 1, r.steps.length)) + '/' + r.steps.length, 124, 10);
-
-      /* terminal-style output: last 3 lines (rows reserved below for the
-         always-visible "simulated, no HID" disclaimer) */
-      var lines = r.log;
-      var start = Math.max(0, lines.length - 3);
-      for (var i = 0; i < 3; i++) {
-        var li = start + i;
-        if (li >= lines.length) break;
-        var text = lines[li];
-        var cursor = (li === lines.length - 1 && !r.done && r.steps[r.idx] && r.steps[r.idx].type === 'string') ? '_' : '';
-        drawText(c, trunc(text + cursor, 21), 4, 20 + i * 7);
-      }
-
-      drawText(c, 'SIMULATED-NO HID OUT', 4, 48);
-      if (r.done) {
-        drawTextC(c, 'DONE  BACK=EXIT', 56);
-      } else {
-        var step = r.steps[r.idx];
-        var hint = step && step.type === 'delay' ? 'WAIT' : (step && step.type === 'rem' ? 'NOTE' : 'TYPING');
-        drawText(c, hint, 4, 56);
-        drawTextR(c, 'BACK=STOP', 124, 56);
-      }
+    });
+  }
+  function reader(path) {
+    var data = FZ.fs.read(path);
+    if (data === null) {
+      back();
+      return;
     }
-  };
-
-  FZ.os = os;
-})();
+    var p = { id: 'reader', path: path, title: path.split('/').pop(), scroll: 0 };
+    if (/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(data)) {
+      p.image = new Image();
+      p.image.onload = dirty;
+      p.image.src = data;
+    } else
+      p.lines = data.split('\n').flatMap(function (x) {
+        return x.match(/.{1,20}/g) || [''];
+      });
+    show(p);
+  }
+  function actions(path) {
+    list(
+      'actions',
+      'File actions',
+      function () {
+        return ['Rename', 'Delete', 'Cancel'];
+      },
+      function (i) {
+        if (i === 0) {
+          editor(
+            'Rename file',
+            path.split('/').pop(),
+            function (name) {
+              var dst = FZ.fs.rename(path, name);
+              if (!dst) throw Error('Invalid or duplicate name');
+              stack.forEach(function (q) {
+                if (q.path === path) {
+                  q.path = dst;
+                  q.title = name;
+                }
+              });
+            },
+            64
+          );
+        } else if (i === 1)
+          show({
+            id: 'confirm',
+            title: 'Delete file?',
+            lines: [path.split('/').pop().slice(0, 20), 'OK: DELETE', 'BACK: KEEP'],
+            accept: function () {
+              FZ.fs.remove(path);
+              while (page.id !== 'browser' && stack.length) back();
+            }
+          });
+        else back();
+      }
+    );
+  }
+  function renderList(c, p) {
+    var names = p.rows();
+    p.sel = Math.min(p.sel, Math.max(0, names.length - 1));
+    title(c, p.title);
+    drawText(c, names.length ? p.sel + 1 + '/' + names.length : '0', 102, 2, BG);
+    if (!names.length) {
+      drawTextC(c, 'EMPTY FOLDER', 30);
+      drawTextC(c, 'BACK TO RETURN', 52);
+      return;
+    }
+    var start = Math.max(0, Math.min(p.sel - 1, names.length - 4));
+    for (var j = 0; j < 4 && j + start < names.length; j++) {
+      var idx = j + start,
+        y = 15 + 12 * j;
+      if (idx === p.sel) {
+        c.fillStyle = FG;
+        c.fillRect(2, y - 2, 124, 11);
+      }
+      drawText(
+        c,
+        ((idx === p.sel ? '> ' : '  ') + names[idx]).slice(0, 21),
+        3,
+        y,
+        idx === p.sel ? BG : FG
+      );
+    }
+  }
+  function title(c, t) {
+    c.fillStyle = FG;
+    c.fillRect(0, 0, 128, 11);
+    drawText(c, String(t).slice(0, 16), 3, 2, BG);
+  }
+  function bars(c, x, y, n, color) {
+    c.fillStyle = color || FG;
+    for (var i = 0; i < 4; i++) {
+      var h = i < n ? 2 + i * 2 : 1;
+      c.fillRect(x + i * 3, y - h, 2, h);
+    }
+  }
+  function status(c) {
+    if (paired) {
+      c.fillStyle = FG;
+      c.fillRect(2, 0, 69, 9);
+      c.fillRect(1, 1, 71, 7);
+      drawText(c, 'CONNECTED', 3, 1, BG);
+      bars(c, 59, 8, signal, BG);
+    } else {
+      drawText(c, 'FLIPPER', 2, 1);
+      bars(c, 46, 8, 0);
+    }
+    c.strokeStyle = FG;
+    c.strokeRect(111.5, 1.5, 12, 6);
+    c.fillStyle = FG;
+    c.fillRect(113, 3, 8, 3);
+    c.fillRect(124, 3, 2, 3);
+    drawText(c, '87%', 91, 1);
+  }
+  // Integer scanline fills keep curves, moving flukes and fins on the LCD grid.
+  function poly(c, pts, x, y, color) {
+    c.fillStyle = color;
+    var max = Math.max.apply(
+      null,
+      pts.map(function (p) {
+        return p[1];
+      })
+    );
+    for (var row = 0; row <= max; row++) {
+      var cuts = [];
+      for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        var a = pts[i],
+          b = pts[j];
+        if ((a[1] <= row && b[1] > row) || (b[1] <= row && a[1] > row))
+          cuts.push(a[0] + ((row - a[1]) * (b[0] - a[0])) / (b[1] - a[1]));
+      }
+      cuts.sort(function (a, b) {
+        return a - b;
+      });
+      for (var n = 0; n < cuts.length; n += 2)
+        c.fillRect(
+          x + Math.round(cuts[n]),
+          y + row,
+          Math.max(1, Math.round(cuts[n + 1]) - Math.round(cuts[n])),
+          1
+        );
+    }
+  }
+  function dolphin(c, phase) {
+    var y = 14 + (phase === 1 ? -1 : 0),
+      x = 4;
+    poly(
+      c,
+      [
+        [3, 29],
+        [10, 27],
+        [15, 27],
+        [18, 21],
+        [22, 15],
+        [28, 11],
+        [34, 9],
+        [32, 3],
+        [36, 4],
+        [42, 9],
+        [48, 9],
+        [53, 11],
+        [56, 15],
+        [56, 17],
+        [62, 17],
+        [64, 19],
+        [62, 22],
+        [55, 23],
+        [50, 26],
+        [43, 26],
+        [36, 24],
+        [31, 26],
+        [29, 32],
+        [25, 35],
+        [24, 30],
+        [25, 26],
+        [19, 28],
+        [15, 32],
+        [11, 32],
+        [6, 36 - phase],
+        [3, 35 - phase],
+        [7, 31]
+      ],
+      x,
+      y,
+      BG
+    );
+    poly(
+      c,
+      [
+        [16, 28],
+        [23, 21],
+        [30, 17],
+        [38, 17],
+        [41, 18],
+        [33, 20],
+        [28, 23],
+        [24, 24]
+      ],
+      x,
+      y,
+      FG
+    );
+    c.fillStyle = FG;
+    c.fillRect(x + 49, y + 14, 5, phase === 2 ? 1 : 4);
+    c.fillStyle = BG;
+    c.fillRect(x + 52, y + 15, 2, 2);
+    c.fillStyle = FG;
+    c.fillRect(x + 53, y + 20, 8, 1);
+    c.fillRect(x + 50, y + 19, 4, 1);
+    c.fillStyle = BG;
+    [
+      [3, 10],
+      [6, 8],
+      [10, 14],
+      [63, 8],
+      [60, 6]
+    ].forEach(function (p) {
+      c.fillRect(x + p[0], y + p[1] - phase, 1, 1);
+    });
+  }
+  function homeArt(c, now) {
+    status(c);
+    c.fillStyle = FG;
+    c.fillRect(0, 11, 128, 43);
+    dolphin(c, FZ.flags.reducedMotion ? 0 : Math.floor(now / 620) % 3);
+    drawText(c, 'FLIPPER', 77, 21, BG);
+    drawText(c, 'ZERO', 77, 31, BG);
+    c.fillStyle = BG;
+    c.fillRect(77, 42, 24, 1);
+    drawText(c, 'OK MENU', 1, 57);
+    drawText(c, 'V ARCHIVE', 73, 57);
+  }
+  function draw(now) {
+    var c = screen.begin();
+    c.fillStyle = BG;
+    c.fillRect(0, 0, 128, 64);
+    var p = page;
+    if (now - os.findT0 < 2600) {
+      var inv = FZ.flags.reducedMotion || Math.floor(now / 460) % 2 === 0;
+      c.fillStyle = inv ? FG : BG;
+      c.fillRect(0, 0, 128, 64);
+      drawTextC(c, 'HERE I AM', 20, inv ? BG : FG, 2);
+      drawTextC(c, 'FIND MY FLIPPER', 46, inv ? BG : FG);
+    } else if (p.id === 'home') homeArt(c, now);
+    else if (p.id === 'boot') {
+      invBoxC(c, 'FLIPPER LAB', 13);
+      drawTextC(c, 'STARTING OS', 32);
+      c.fillStyle = FG;
+      c.fillRect(11, 49, Math.round(106 * FZ.util.clamp(1 - (bootEnd - now) / 870, 0, 1)), 4);
+    } else if (p.id === 'pair') {
+      title(c, 'Pairing code');
+      drawTextC(c, pin, 21, FG, 2);
+      drawTextC(c, 'MATCH ON PHONE', 43);
+      drawTextC(c, 'OK PAIR / BACK EXIT', 56);
+    } else if (p.id === 'update') {
+      title(c, 'System update');
+      drawTextC(c, update.stage, 22);
+      c.strokeStyle = FG;
+      c.strokeRect(7.5, 38.5, 113, 8);
+      c.fillStyle = FG;
+      c.fillRect(9, 40, Math.round((110 * update.percent) / 100), 5);
+      drawTextC(c, update.percent + '%', 52);
+    } else if (p.rows) renderList(c, p);
+    else if (p.id === 'editor') {
+      title(c, p.title);
+      var offset = Math.max(0, p.cursor - 17);
+      drawText(c, p.value.slice(offset, offset + 19) + '_', 4, 23);
+      c.fillStyle = FG;
+      c.fillRect(4 + (p.cursor - offset) * 6, 32, 5, 1);
+      drawText(c, 'L/R MOVE  U/D EDIT', 3, 43);
+      drawText(c, 'TYPE NAME / OK SAVE', 3, 55);
+    } else if (p.id === 'reader') {
+      title(c, p.title);
+      if (p.image && p.image.complete) c.drawImage(p.image, 18, 12, 92, 46);
+      else if (p.lines)
+        for (var j = 0; j < 5; j++) drawText(c, p.lines[p.scroll + j] || '', 2, 14 + j * 10);
+    } else if (p.draw) p.draw(c, now);
+    else {
+      title(c, p.title);
+      (p.lines || []).slice(0, 4).forEach(function (v, i) {
+        drawText(c, String(v).slice(0, 21), 3, 16 + i * 11);
+      });
+    }
+    if (os.testPattern) {
+      c.fillStyle = FG;
+      c.fillRect(0, 0, 128, 64);
+      c.fillStyle = BG;
+      for (var u = 0; u < 16; u++)
+        for (var v = 0; v < 8; v++) if ((u + v) % 2) c.fillRect(u * 8, v * 8, 8, 8);
+      c.fillStyle = FG;
+      c.fillRect(4, 18, 120, 27);
+      drawText(c, 'L', 6, 27, BG);
+      drawTextC(c, '128X64', 26, BG, 2);
+      drawText(c, 'R', 117, 27, BG);
+    }
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.fillStyle = 'rgba(26,15,0,.07)';
+    for (var x = 1; x < screen.canvas.width; x += screen.scale)
+      c.fillRect(x, 0, 1, screen.canvas.height);
+    for (var y = 1; y < screen.canvas.height; y += screen.scale)
+      c.fillRect(0, y, screen.canvas.width, 1);
+    if (settings.brightness < 100) {
+      c.fillStyle = 'rgba(18,10,0,' + (100 - settings.brightness) / 135 + ')';
+      c.fillRect(0, 0, screen.canvas.width, screen.canvas.height);
+    }
+    screen.markDirty();
+  }
+  function onKey(k) {
+    var p = page;
+    if (!p) return;
+    dirty();
+    if (p.id === 'update') return;
+    if (p.id === 'boot') {
+      home();
+      return;
+    }
+    if (p.id === 'pair') {
+      if (k === 'ok') acceptPin(pin);
+      else if (k === 'back') {
+        pin = '';
+        FZ.link.event('flipper', 'link.pair.cancel', {});
+        home();
+      }
+      return;
+    }
+    if (k === 'back') {
+      if (p.id !== 'home') back();
+      return;
+    }
+    if (p.id === 'home') {
+      if (k === 'ok') mainMenu();
+      if (k === 'down') browser('/ext', 'Archive');
+      if (k === 'right') settingsMenu();
+      if (k === 'left') appsMenu();
+      return;
+    }
+    if (p.id === 'editor') {
+      var abc = ' abcdefghijklmnopqrstuvwxyz0123456789_-.';
+      if (k === 'ok') {
+        try {
+          p.commit(p.value.trim());
+          back();
+          if (page.id === 'actions') back();
+        } catch (e) {
+          FZ.toast(e.message);
+        }
+        return;
+      }
+      if (k === 'left' || k === 'right')
+        p.cursor = FZ.util.clamp(
+          p.cursor + (k === 'left' ? -1 : 1),
+          0,
+          Math.min(p.max - 1, p.value.length)
+        );
+      else if (k === 'up' || k === 'down') {
+        var v = abc.indexOf((p.value[p.cursor] || ' ').toLowerCase());
+        p.value =
+          p.value.slice(0, p.cursor) +
+          abc[(v + abc.length + (k === 'up' ? 1 : -1)) % abc.length] +
+          p.value.slice(p.cursor + 1);
+      }
+      return;
+    }
+    if (p.rows) {
+      var n = p.rows().length;
+      if (p.id === 'browser' && k === 'right' && n) {
+        actions(entries(p)[p.sel].path);
+        return;
+      }
+      if (!n) return;
+      if (k === 'up' || k === 'down') p.sel = (p.sel + n + (k === 'up' ? -1 : 1)) % n;
+      if (k === 'ok') p.select(p.sel);
+      return;
+    }
+    if (p.key) p.key(k);
+    else if (p.id === 'confirm' && k === 'ok') p.accept();
+    else if (p.id === 'reader') {
+      if (k === 'right') actions(p.path);
+      else
+        p.scroll = FZ.util.clamp(
+          p.scroll + (k === 'down' ? 1 : k === 'up' ? -1 : 0),
+          0,
+          Math.max(0, (p.lines || []).length - 5)
+        );
+    } else if (k === 'ok') back();
+  }
+  function acceptPin(value) {
+    if (!pin || pin !== value || page.id !== 'pair') return false;
+    pin = '';
+    FZ.link.establish({ connected: true, name: settings.name });
+    return true;
+  }
+  function tick(now) {
+    if (!page) return;
+    if (os.findT0 > -1e8 && now - os.findT0 >= 2600) {
+      os.findT0 = -1e9;
+      changed = true;
+    }
+    if (page.id === 'boot' && now >= bootEnd) home();
+    if (page.tick) page.tick(now);
+    var anim =
+      page.id === 'boot' ||
+      (page.id === 'home' && !FZ.flags.reducedMotion) ||
+      !!page.animation ||
+      now - os.findT0 < 2850;
+    if ((changed || (anim && now >= nextTick)) && now - lastDraw >= 33.34) {
+      draw(now);
+      changed = false;
+      lastDraw = now;
+      nextTick = now + (page.id === 'home' ? 600 : page.interval || 90);
+    }
+  }
+  function rpc() {
+    FZ.link.attach('flipper', {
+      'link.scan': function (p, reply) {
+        var serial = ++scanSerial;
+        setTimeout(function () {
+          reply(null, {
+            devices:
+              serial === scanSerial ? [{ id: 'fz-sim-01', name: settings.name, rssi: -46 }] : []
+          });
+        }, 780);
+      },
+      'link.pair.request': function (p, reply) {
+        if (paired || p.id !== 'fz-sim-01') return reply('Device unavailable');
+        home();
+        pin = String(FZ.util.randInt(100000, 999999));
+        show({ id: 'pair' });
+        reply(null, { pin: pin, name: settings.name });
+      },
+      'link.pair.accept': function (p, reply) {
+        var ok = acceptPin(p.pin);
+        reply(ok ? null : 'PIN expired', { ok: ok });
+      },
+      'link.pair.abort': function (p, reply) {
+        pin = '';
+        scanSerial++;
+        if (page.id === 'pair') home();
+        reply(null, {});
+      },
+      'link.disconnect': function (p, reply) {
+        FZ.link.establish({ connected: false });
+        reply(null, {});
+      },
+      'link.status': function (p, reply) {
+        if (reply) return reply(null, { connected: paired, signal: signal });
+        paired = !!p.connected;
+        signal = p.signal;
+        pin = '';
+        if (!update) home();
+      },
+      'link.signal': function (p) {
+        signal = p.signal;
+        if (paired) dirty();
+      },
+      'system.ping': function (p, r) {
+        r(null, { echo: p.t });
+      },
+      'system.info': function (p, r) {
+        r(null, info());
+      },
+      'system.rename': function (p, r) {
+        try {
+          rename(p.name);
+          r(null, info());
+        } catch (e) {
+          r(e.message);
+        }
+      },
+      'app.find': function (p, r) {
+        os.findT0 = FZ.util.now();
+        FZ.audio.alarm();
+        dirty();
+        r(null, { duration: 2600 });
+      },
+      'firmware.update.start': function (p, r) {
+        try {
+          r(null, os.startUpdate());
+        } catch (e) {
+          r(e.message);
+        }
+      },
+      'firmware.update.progress': function (p, r) {
+        r(null, update);
+      },
+      'storage.info': function (p, r) {
+        r(null, storageInfo());
+      },
+      'storage.list': function (p, r) {
+        var n = FZ.fs.stat(p.path);
+        if (!n || !n.dir) return r('Folder not found');
+        r(null, { path: n.path, entries: FZ.fs.list(n.path) });
+      },
+      'storage.read': function (p, r) {
+        var d = FZ.fs.read(p.path);
+        r(d === null ? 'File not found' : null, { path: p.path, data: d });
+      },
+      'storage.delete': function (p, r) {
+        var ok = FZ.fs.remove(p.path);
+        r(ok ? null : 'Cannot delete', { path: p.path });
+      },
+      'storage.rename': function (p, r) {
+        var dst = FZ.fs.rename(p.path, p.name);
+        r(dst ? null : 'Invalid or duplicate name', { path: dst });
+      }
+    });
+  }
+  var os = (FZ.os = {
+    init: function (s) {
+      screen = this.screen = s;
+      settings = cleanSettings(FZ.storage.get('device', {}));
+      rpc();
+      boot();
+      FZ.fs.subscribe(function (op) {
+        if (paired)
+          FZ.link.event('flipper', 'storage.changed', { op: op.op, path: op.path, to: op.to });
+        if (page && page.path && !FZ.fs.exists(page.path)) {
+          while (page.path && !FZ.fs.exists(page.path) && stack.length) back();
+        }
+        dirty();
+      });
+    },
+    nextWake: function (now) {
+      if (changed) return Math.max(1, 34 - (now - lastDraw));
+      if (!page) return 100;
+      if (
+        page.id === 'boot' ||
+        page.animation ||
+        (page.id === 'home' && !FZ.flags.reducedMotion) ||
+        now - os.findT0 < 2600
+      )
+        return Math.max(1, nextTick - now);
+      return 60000;
+    },
+    tick: tick,
+    onKey: onKey,
+    dirty: dirty,
+    home: home,
+    rename: rename,
+    findT0: -1e9,
+    get state() {
+      return page && page.id;
+    },
+    get pin() {
+      return pin;
+    },
+    get name() {
+      return settings.name;
+    },
+    get connected() {
+      return paired;
+    },
+    get selection() {
+      return page.sel;
+    },
+    get currentPath() {
+      return page.path;
+    },
+    get settings() {
+      return Object.assign({}, settings);
+    },
+    restore: function (v) {
+      settings = cleanSettings(v);
+      if (paired) FZ.link.rename(settings.name);
+      saveSettings();
+      home();
+    },
+    type: function (key) {
+      if (!page || page.id !== 'editor') return false;
+      if (key === 'Backspace') {
+        page.value = page.value.slice(0, -1);
+      } else if (/^[a-zA-Z0-9 _().-]$/.test(key)) {
+        if (!page.typed) {
+          page.value = '';
+          page.typed = true;
+        }
+        page.value = (page.value + key).slice(0, page.max);
+      } else return false;
+      page.cursor = Math.min(page.value.length, page.max - 1);
+      dirty();
+      return true;
+    },
+    ui: {
+      show: show,
+      back: back,
+      list: list,
+      note: note,
+      browser: browser,
+      dirty: dirty,
+      reader: reader,
+      title: title,
+      text: drawText,
+      center: drawTextC,
+      box: invBoxC,
+      fg: FG,
+      bg: BG
+    },
+    keySlot: function (value) {
+      if (/^SIM-[0-9A-F]{4}$/.test(value)) {
+        settings.keySlot = value;
+        saveSettings();
+      }
+      return settings.keySlot;
+    },
+    startUpdate: function () {
+      if (update) return update;
+      if (settings.firmware === '1.1.0-sim') throw Error('Already up to date');
+      update = { stage: 'Checking', percent: 0 };
+      stack = [];
+      show({ id: 'update' }, true);
+      var start = Date.now();
+      var stages = ['Checking', 'Downloading', 'Uploading', 'Rebooting'];
+      clearInterval(bootTimer);
+      bootTimer = setInterval(function () {
+        var pc = Math.min(100, Math.floor((Date.now() - start) / 48));
+        update = { stage: stages[Math.min(3, Math.floor(pc / 25))], percent: pc };
+        dirty();
+        if (paired) FZ.link.event('flipper', 'firmware.update.progress', update);
+        if (pc === 100) {
+          clearInterval(bootTimer);
+          settings.firmware = '1.1.0-sim';
+          saveSettings();
+          update = null;
+          boot();
+          FZ.note('Simulated firmware updated');
+        }
+      }, 180);
+      return update;
+    },
+    get update() {
+      return update;
+    },
+    cancelUpdate: function () {
+      clearInterval(bootTimer);
+      update = null;
+    }
+  });
+})(window.FZ);

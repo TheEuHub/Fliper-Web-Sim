@@ -1,816 +1,957 @@
-/* Fliper Web Sim — phone-app: re-implementation of the Flipper companion
-   app (original code). Dark theme, orange accent, system font stack.
-   The phone NEVER reads Flipper state directly: it sends RPC requests
-   through link.js and renders responses and events.
-   Stage 4 adds a Storage screen (browse / view / rename / delete the
-   virtual SD card entirely over fs.* RPC calls) kept in sync with the
-   Flipper's own file manager via fs.changed push events, plus a
-   Find My Flipper button that flashes the Flipper's LCD. */
-(function () {
+/* Companion: a canvas client of the simulated RPC bus. No filesystem/device references. */
+(function (FZ) {
   'use strict';
-  var FZ = window.FZ;
-
-  var W = 360, H = 760;
-  var BG = '#101014';
-  var CARD = '#17171C';
-  var LINE = '#2A2A31';
-  var FG = '#E8E8EC';
-  var SUB = '#8A8A93';
-  var ACCENT = '#FF8200';
-  var DANGER = '#E06C6C';
-  var FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-  var MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-
-  function roundRect(c, x, y, w, h, r) {
-    r = Math.min(r, w / 2, h / 2);
+  var sans = '-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif',
+    mono = 'ui-monospace,Menlo,Consolas,monospace';
+  var ink = '#f3f2ed',
+    muted = '#a1a09d',
+    line = '#343434',
+    card = '#202122',
+    amber = '#ff901f',
+    bg = '#141516';
+  var sc,
+    c,
+    needs = true,
+    last = -Infinity,
+    next = 0,
+    epoch = 0,
+    seq = 0,
+    startY = 0,
+    scroll0 = 0,
+    scroll = 0,
+    maxScroll = 0,
+    hits = [],
+    viewToken = 0;
+  var infoSeq = 0,
+    info = null,
+    entries = [],
+    path = '/ext',
+    archive = false,
+    file = null,
+    renameTarget = null,
+    draft = '',
+    notice = '',
+    progress = null,
+    volumeUntil = 0,
+    clockMinute = -1,
+    findUntil = 0;
+  function dirty() {
+    needs = true;
+    if (FZ.scene) FZ.scene.wake();
+  }
+  function publish() {
+    FZ.emit('phone', phone.state);
+    dirty();
+  }
+  function state(s) {
+    phone.state = s;
+    scroll = maxScroll = 0;
+    notice = '';
+    viewToken++;
+    publish();
+  }
+  function err(e) {
+    notice = String(e.message || e);
+    if (FZ.toast) FZ.toast(notice);
+    dirty();
+  }
+  function rpc(cmd, p) {
+    return FZ.link.rpc(cmd, p);
+  }
+  function text(s, x, y, size, color, weight, align, font) {
+    c.fillStyle = color || ink;
+    c.font = (weight || 500) + ' ' + size + 'px ' + (font || sans);
+    c.textAlign = align || 'left';
+    c.textBaseline = 'alphabetic';
+    c.fillText(String(s), x, y);
+    c.textAlign = 'left';
+  }
+  function box(x, y, w, h, r, fill, stroke) {
     c.beginPath();
+    r = Math.min(r, w / 2, h / 2);
     c.moveTo(x + r, y);
     c.arcTo(x + w, y, x + w, y + h, r);
     c.arcTo(x + w, y + h, x, y + h, r);
     c.arcTo(x, y + h, x, y, r);
     c.arcTo(x, y, x + w, y, r);
     c.closePath();
-  }
-
-  function fmtBytes(n) {
-    if (n < 1000) return n + ' B';
-    if (n < 1000000) return (n / 1000).toFixed(1) + ' KB';
-    return (n / 1000000).toFixed(1) + ' MB';
-  }
-
-  function centerText(c, str, y, font, color) {
-    c.font = font;
-    c.fillStyle = color;
-    c.textAlign = 'center';
-    c.textBaseline = 'alphabetic';
-    c.fillText(str, W / 2, y);
-    c.textAlign = 'left';
-  }
-
-  var ROW_H = 58, ROWS_PER_PAGE = 7;
-  var KEYROWS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '_-().'];
-
-  var phone = {
-    screen: null,
-    state: 'idle',        /* idle | scanning | devices | pin | waiting | connected
-                              | storage | storage-view | storage-act | storage-ren | storage-del */
-    off: false,
-    pin: '',
-    deviceName: 'Flipper Zero',
-    devices: [],
-    info: null,
-    signal: 0,
-    hits: [],
-    hitsState: null,
-    downX: 0, downY: 0, moved: false,
-    volT0: -1e9,
-    forceDraw: true,
-    findT0: -1e9,
-    findBusy: false,
-
-    /* ---------- Stage 4: Storage screen state ---------- */
-    st: {
-      path: '/ext', entries: null, page: 0, loading: false, backTo: 'connected',
-      view: null,        /* {path, data, isImg, img, lines, scroll} */
-      act: null,         /* {path, dir, sel, from} */
-      ren: null,         /* {path, buf, from} */
-      del: null          /* {path, from} */
-    },
-
-    dirty: function () { if (this.screen) this.screen.markDirty(); },
-
-    setState: function (s) {
-      this.state = s;
-      this.forceDraw = true;
-      this.draw(FZ.util.now());
-    },
-
-    init: function (screen) {
-      this.screen = screen;
-      var self = this;
-
-      FZ.link.attach('phone', {
-        'link.status': function (p) {
-          if (p.connected) {
-            self.deviceName = p.name || self.deviceName;
-            self.setState('connected');
-            self.requestInfo();
-          } else {
-            self.pin = '';
-            self.info = null;
-            self.setState('idle');
-          }
-        },
-        'link.signal': function (p) {
-          self.signal = p.signal | 0;
-          self.dirty();
-        },
-        'link.pair.confirm': function (p) {
-          if ((self.state === 'pin' || self.state === 'waiting') && p.pin === self.pin) {
-            FZ.link.establish({ connected: true, name: self.deviceName });
-          }
-        },
-        'link.pair.cancel': function () {
-          if (self.state === 'pin' || self.state === 'waiting') self.setState('devices');
-        },
-        'link.pair.retry': function () {
-          if (self.state === 'waiting') self.setState('pin');
-        },
-
-        /* Stage 4: pushed whenever the virtual SD card changes anywhere
-           (on-device file manager or a phone RPC) — refresh within ~1 s
-           if the Storage screen is currently looking at affected data. */
-        'fs.changed': function () {
-          self.onFsChanged();
-        }
-      });
-
-      this.forceDraw = true;
-      this.draw(FZ.util.now());
-    },
-
-    /* ---------- Stage 4: Storage screen (over fs.* RPC) ---------- */
-    onFsChanged: function () {
-      var s = this.state;
-      if (s === 'storage') this.loadList(this.st.path, true);
-      else if (s === 'storage-view' && this.st.view) this.loadView(this.st.view.path, true);
-    },
-
-    openStorage: function () {
-      this.st.backTo = 'connected';
-      this.loadList('/ext', false);
-      this.setState('storage');
-    },
-
-    loadList: function (path, silent) {
-      var self = this;
-      var st = this.st;
-      if (!silent) { st.loading = true; st.entries = null; this.forceDraw = true; this.draw(FZ.util.now()); }
-      FZ.link.request('phone', 'fs.list', { path: path }, function (err, payload) {
-        st.loading = false;
-        if (err) { if (!silent && FZ.toast) FZ.toast('Storage error: ' + err); return; }
-        st.path = payload.path;
-        st.entries = payload.entries;
-        if (!silent) st.page = 0;
-        self.dirty();
-      });
-    },
-
-    openDir: function (path) {
-      this.st.page = 0;
-      this.loadList(path, false);
-    },
-
-    upDir: function () {
-      var p = this.st.path;
-      if (p === '/ext') { this.setState(this.st.backTo); return; }
-      var parts = p.split('/');
-      parts.pop();
-      this.openDir(parts.join('/') || '/ext');
-    },
-
-    loadView: function (path, silent) {
-      var self = this;
-      var st = this.st;
-      if (!silent) { st.view = { path: path, data: null, isImg: false, img: null, lines: [], scroll: 0 }; this.setState('storage-view'); }
-      FZ.link.request('phone', 'fs.read', { path: path }, function (err, payload) {
-        if (err) { if (FZ.toast) FZ.toast('Could not read file: ' + err); if (!silent) self.setState('storage'); return; }
-        var isImg = payload.data.indexOf('data:image/') === 0;
-        var v = { path: payload.path, data: payload.data, isImg: isImg, img: null, lines: isImg ? [] : payload.data.split('\n'), scroll: 0 };
-        if (st.view && st.view.path === payload.path) v.scroll = st.view.scroll;
-        st.view = v;
-        if (isImg && typeof Image !== 'undefined') {
-          var img = new Image();
-          img.onload = function () { v.img = img; self.dirty(); };
-          img.src = payload.data;
-        }
-        self.dirty();
-      });
-    },
-
-    openAct: function (entry, from) {
-      this.st.act = { path: entry.path, dir: entry.dir, sel: 0, from: from };
-      this.setState('storage-act');
-    },
-
-    startRen: function () {
-      var a = this.st.act;
-      if (!a) return;
-      var name = a.path.split('/').pop().toLowerCase();
-      this.st.ren = { path: a.path, buf: name.split(''), from: a.from };
-      this.setState('storage-ren');
-    },
-
-    commitRen: function () {
-      var self = this;
-      var r = this.st.ren;
-      if (!r || !r.buf.length) { if (FZ.toast) FZ.toast('Name cannot be empty'); return; }
-      FZ.link.request('phone', 'fs.rename', { path: r.path, name: r.buf.join('') }, function (err, payload) {
-        if (err) { if (FZ.toast) FZ.toast('Rename failed: ' + err); return; }
-        FZ.audio.ok();
-        if (r.from === 'storage-view') { self.loadView(payload.path, false); }
-        else { self.loadList(self.st.path, false); self.setState('storage'); }
-      });
-    },
-
-    startDel: function () {
-      var a = this.st.act;
-      if (!a) return;
-      this.st.del = { path: a.path, from: a.from };
-      this.setState('storage-del');
-    },
-
-    commitDel: function () {
-      var self = this;
-      var d = this.st.del;
-      if (!d) return;
-      FZ.link.request('phone', 'fs.remove', { path: d.path }, function (err) {
-        if (err) { if (FZ.toast) FZ.toast('Delete failed: ' + err); self.setState(d.from); return; }
-        FZ.audio.beep(330, 0.08, 0.08);
-        self.loadList(self.st.path, false);
-        self.setState('storage');
-      });
-    },
-
-    /* ---------- Stage 4: find my Flipper ---------- */
-    findFlipper: function () {
-      var self = this;
-      if (this.findBusy) return;
-      this.findBusy = true;
-      FZ.link.request('phone', 'find.flipper', {}, function (err) {
-        self.findBusy = false;
-        if (err) { if (FZ.toast) FZ.toast('Find failed: ' + err); return; }
-        self.findT0 = FZ.util.now();
-        if (FZ.toast) FZ.toast('Flashing the Flipper screen…');
-        self.forceDraw = true;
-        self.draw(FZ.util.now());
-      });
-    },
-
-    requestInfo: function () {
-      var self = this;
-      FZ.link.request('phone', 'system.info', {}, function (err, payload) {
-        if (!err && payload) { self.info = payload; self.dirty(); }
-      });
-    },
-
-    /* ---------- actions ---------- */
-    scan: function () {
-      var self = this;
-      this.setState('scanning');
-      FZ.link.request('phone', 'link.scan', {}, function (err, payload) {
-        if (err) { self.setState('idle'); if (FZ.toast) FZ.toast('Scan failed: ' + err); return; }
-        self.devices = (payload && payload.devices) || [];
-        self.setState('devices');
-      });
-    },
-
-    pairWith: function (dev) {
-      var self = this;
-      this.deviceName = dev.name;
-      FZ.link.request('phone', 'link.pair.request', { id: dev.id }, function (err, payload) {
-        if (err) { self.setState('devices'); if (FZ.toast) FZ.toast('Pairing failed: ' + err); return; }
-        self.pin = payload.pin;
-        self.setState('pin');
-      });
-    },
-
-    confirmPair: function () {
-      this.setState('waiting');
-    },
-
-    cancelPair: function () {
-      var self = this;
-      this.setState('devices');
-      FZ.link.request('phone', 'link.pair.abort', {}, function () {});
-    },
-
-    disconnect: function () {
-      FZ.link.request('phone', 'link.disconnect', {}, function (err) {
-        if (err && FZ.link.get().connected) FZ.link.establish({ connected: false });
-      });
-    },
-
-    /* ---------- side buttons ---------- */
-    onSide: function (name) {
-      if (name === 'power') {
-        this.off = !this.off;
-        this.forceDraw = true;
-        this.draw(FZ.util.now());
-        return;
-      }
-      if (name === 'vol_up') FZ.audio.setVolume(FZ.audio.getVolume() + 0.15);
-      if (name === 'vol_down') FZ.audio.setVolume(FZ.audio.getVolume() - 0.15);
-      this.volT0 = FZ.util.now();
-      this.forceDraw = true;
-      this.draw(FZ.util.now());
-    },
-
-    /* ---------- pointer pipeline (coords in canvas pixels) ---------- */
-    pointer: function (type, x, y) {
-      if (type === 'down') { this.downX = x; this.downY = y; this.moved = false; return; }
-      if (type === 'move') {
-        var dx = x - this.downX, dy = y - this.downY;
-        if (dx * dx + dy * dy > 36) this.moved = true; /* 6 px threshold */
-        return;
-      }
-      /* up */
-      if (!this.moved) this.tap(x, y);
-    },
-
-    tap: function (x, y) {
-      if (this.off) { this.off = false; this.forceDraw = true; this.draw(FZ.util.now()); return; }
-      if (this.hitsState !== this.state) { this.forceDraw = true; this.draw(FZ.util.now()); }
-      for (var i = this.hits.length - 1; i >= 0; i--) {
-        var b = this.hits[i];
-        if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-          FZ.audio.click();
-          b.fn.call(this);
-          return;
-        }
-      }
-    },
-
-    tick: function (now) {
-      var anim = this.state === 'scanning' || this.state === 'waiting' || (now - this.volT0 < 1100);
-      if (this.forceDraw || anim || this.screen.dirty) {
-        this.draw(now);
-        this.forceDraw = false;
-      }
-    },
-
-    /* ---------- widgets ---------- */
-    addButton: function (c, x, y, w, h, label, style, fn) {
-      roundRect(c, x, y, w, h, 12);
-      if (style === 'primary') {
-        c.fillStyle = ACCENT;
-        c.fill();
-        c.fillStyle = '#1A0F00';
-        c.font = '700 15px ' + FONT;
-      } else if (style === 'danger') {
-        c.fillStyle = BG;
-        c.fill();
-        c.strokeStyle = '#493030';
-        c.lineWidth = 1.5;
-        c.stroke();
-        c.fillStyle = DANGER;
-        c.font = '600 15px ' + FONT;
-      } else {
-        c.fillStyle = BG;
-        c.fill();
-        c.strokeStyle = LINE;
-        c.lineWidth = 1.5;
-        c.stroke();
-        c.fillStyle = FG;
-        c.font = '600 15px ' + FONT;
-      }
-      c.textAlign = 'center';
-      c.textBaseline = 'middle';
-      c.fillText(label, x + w / 2, y + h / 2 + 1);
-      c.textAlign = 'left';
-      c.textBaseline = 'alphabetic';
-      this.hits.push({ x: x, y: y, w: w, h: h, fn: fn });
-    },
-
-    addRow: function (c, y, label, value, bar) {
-      var x = 20, w = 320, h = 64;
-      roundRect(c, x, y, w, h, 12);
-      c.fillStyle = CARD;
+    if (fill) {
+      c.fillStyle = fill;
       c.fill();
-      c.strokeStyle = LINE;
-      c.lineWidth = 1;
+    }
+    if (stroke) {
+      c.strokeStyle = stroke;
+      c.lineWidth = 1.4;
       c.stroke();
-      c.fillStyle = SUB;
-      c.font = '500 12px ' + FONT;
-      c.fillText(label, x + 16, y + 24);
-      c.fillStyle = FG;
-      c.font = '600 15px ' + FONT;
-      c.fillText(value, x + 16, y + 46);
-      if (bar !== undefined && bar !== null) {
-        var bw = 110, bx = x + w - bw - 16, by = y + h / 2 - 4;
-        roundRect(c, bx, by, bw, 8, 4);
-        c.fillStyle = '#26262C';
-        c.fill();
-        var f = FZ.util.clamp(bar, 0, 1);
-        if (f > 0) {
-          roundRect(c, bx, by, Math.max(8, bw * f), 8, 4);
-          c.fillStyle = ACCENT;
-          c.fill();
-        }
-      }
-    },
-
-    addBars: function (c, x, y, level) {
+    }
+  }
+  function stroke(points, col, width) {
+    c.beginPath();
+    points.forEach(function (p, i) {
+      if (i) c.lineTo(p[0], p[1]);
+      else c.moveTo(p[0], p[1]);
+    });
+    c.strokeStyle = col;
+    c.lineWidth = width || 2;
+    c.stroke();
+  }
+  function hit(x, y, w, h, fn, label) {
+    hits.push({ x: x, y: y, w: w, h: h, fn: fn, label: label });
+  }
+  function button(x, y, w, h, label, primary, fn) {
+    box(x, y, w, h, 10, primary ? amber : card, primary ? null : line);
+    text(label, x + w / 2, y + h / 2 + 6, 17, primary ? '#211407' : ink, 650, 'center');
+    hit(x, y, w, h, fn, label);
+  }
+  function icon(kind, x, y, size, col) {
+    c.save();
+    c.translate(x, y);
+    c.scale(size / 24, size / 24);
+    c.lineJoin = 'round';
+    c.lineCap = 'round';
+    var d = col || ink;
+    if (kind === 'device') {
+      stroke(
+        [
+          [2, 14],
+          [5, 7],
+          [19, 7],
+          [22, 11],
+          [22, 17],
+          [4, 17],
+          [2, 14]
+        ],
+        d,
+        1.6
+      );
+      box(6, 9, 7, 5, 1, null, d);
+      box(15, 9, 4, 4, 2, null, d);
+    } else if (kind === 'archive') {
+      box(3, 5, 18, 4, 1, null, d);
+      stroke(
+        [
+          [5, 10],
+          [5, 20],
+          [19, 20],
+          [19, 10]
+        ],
+        d
+      );
+      stroke(
+        [
+          [10, 13],
+          [14, 13]
+        ],
+        d
+      );
+    } else if (kind === 'folder') {
+      stroke(
+        [
+          [2, 7],
+          [2, 19],
+          [22, 19],
+          [22, 8],
+          [12, 8],
+          [10, 5],
+          [3, 5],
+          [2, 7]
+        ],
+        d,
+        1.6
+      );
+    } else if (kind === 'signal') {
       for (var i = 0; i < 4; i++) {
-        var h = 4 + i * 3;
-        var bx = x + i * 7;
-        roundRect(c, bx, y + 14 - h, 4, h, 1);
-        if (i < level) { c.fillStyle = ACCENT; c.fill(); }
-        else { c.strokeStyle = '#3A3A42'; c.lineWidth = 1; c.stroke(); }
+        c.fillStyle = d;
+        c.fillRect(2 + 5 * i, 18 - 3 * i, 3, 3 + 3 * i);
       }
-    },
-
-    /* ---------- drawing ---------- */
-    draw: function (now) {
-      var s = this.screen;
-      if (!s) return;
-      var c = s.begin();
-      this.hits = [];
-
-      if (this.off) {
-        c.fillStyle = '#000000';
-        c.fillRect(0, 0, W, H);
-        this.hitsState = this.state;
-        s.markDirty();
-        return;
+    } else if (kind === 'bt')
+      stroke(
+        [
+          [6, 7],
+          [17, 17],
+          [12, 21],
+          [12, 3],
+          [17, 7],
+          [6, 17]
+        ],
+        d,
+        2
+      );
+    else if (kind === 'logo') {
+      stroke(
+        [
+          [1, 13],
+          [7, 13],
+          [10, 5],
+          [14, 20],
+          [17, 10],
+          [23, 10]
+        ],
+        d,
+        2.8
+      );
+    }
+    c.restore();
+  }
+  function chrome(now) {
+    var date = new Date();
+    text(
+      FZ.util.pad2(date.getHours()) + ':' + FZ.util.pad2(date.getMinutes()),
+      23,
+      27,
+      15,
+      ink,
+      650
+    );
+    icon('signal', 277, 12, 16, ink);
+    box(301, 16, 22, 9, 2, null, ink);
+    box(303, 18, 16, 5, 1, ink);
+    c.fillStyle = ink;
+    c.fillRect(324, 18, 2, 5);
+    box(20, 53, 29, 29, 8, amber);
+    icon('logo', 24, 57, 21, '#22150b');
+    text('Companion', 58, 77, 25, ink, 700);
+    if (FZ.link.get().connected) {
+      box(224, 55, 116, 26, 13, '#232d23');
+      text('Connected', 235, 73, 13, '#b9d5b2', 650);
+      for (var i = 0; i < 4; i++) {
+        c.fillStyle = i < phone.signal ? '#a8c9a1' : '#4a5149';
+        c.fillRect(313 + i * 4, 73 - (i + 1) * 3, 2, (i + 1) * 3);
       }
-
-      c.fillStyle = BG;
-      c.fillRect(0, 0, W, H);
-
-      /* header */
-      c.fillStyle = FG;
-      c.font = '700 20px ' + FONT;
-      c.fillText('Companion', 20, 42);
-      c.fillStyle = SUB;
-      c.font = '500 11px ' + FONT;
-      c.fillText('SIM', 130, 42);
-      if (this.state === 'connected' || this.state.indexOf('storage') === 0) {
-        roundRect(c, 214, 18, 126, 30, 15);
-        c.strokeStyle = ACCENT;
-        c.lineWidth = 1.5;
-        c.stroke();
-        c.fillStyle = ACCENT;
-        c.font = '700 11px ' + FONT;
-        c.fillText('CONNECTED', 228, 37);
-        this.addBars(c, 306, 24, this.signal);
-      }
-
-      switch (this.state) {
-        case 'scanning': this.drawScanning(c, now); break;
-        case 'devices': this.drawDevices(c); break;
-        case 'pin': this.drawPin(c); break;
-        case 'waiting': this.drawWaiting(c, now); break;
-        case 'connected': this.drawConnected(c); break;
-        case 'storage': this.drawStorage(c); break;
-        case 'storage-view': this.drawStorageView(c); break;
-        case 'storage-act': this.drawStorageAct(c); break;
-        case 'storage-ren': this.drawStorageRen(c); break;
-        case 'storage-del': this.drawStorageDel(c); break;
-        default: this.drawIdle(c); break;
-      }
-
-      /* volume overlay */
-      if (now - this.volT0 < 1100) this.drawVolume(c);
-
-      /* footnote */
-      c.fillStyle = '#55555E';
-      c.font = '500 11px ' + FONT;
-      c.textAlign = 'center';
-      c.fillText('Simulation only — no real Bluetooth', W / 2, H - 18);
-      c.textAlign = 'left';
-
-      this.hitsState = this.state;
-      s.markDirty();
-    },
-
-    drawIdle: function (c) {
-      /* original mini-device glyph */
-      var gx = 140, gy = 150, gw = 80, gh = 150;
-      roundRect(c, gx, gy, gw, gh, 12);
-      c.strokeStyle = LINE;
-      c.lineWidth = 2;
-      c.stroke();
-      roundRect(c, gx + 12, gy + 16, gw - 24, 40, 4);
-      c.strokeStyle = '#3A2A12';
-      c.stroke();
-      c.fillStyle = 'rgba(255,130,0,0.35)';
-      c.fillRect(gx + 16, gy + 20, gw - 32, 32);
-      /* dpad dots */
-      c.fillStyle = LINE;
-      c.beginPath(); c.arc(gx + 30, gy + 92, 7, 0, Math.PI * 2); c.fill();
-      c.beginPath(); c.arc(gx + 50, gy + 92, 7, 0, Math.PI * 2); c.fill();
-      c.beginPath(); c.arc(gx + 40, gy + 112, 7, 0, Math.PI * 2); c.fill();
-
-      centerText(c, 'No device connected', 360, '600 16px ' + FONT, FG);
-      centerText(c, 'Flipper Zero simulator', 386, '500 13px ' + FONT, SUB);
-
-      this.addButton(c, 40, 620, 280, 52, 'SCAN FOR DEVICES', 'primary', this.scan);
-    },
-
-    drawScanning: function (c, now) {
-      var cx = W / 2, cy = 320;
-      for (var i = 0; i < 3; i++) {
-        var r = ((now * 0.06) + i * 70) % 210;
-        c.beginPath();
-        c.arc(cx, cy, r, 0, Math.PI * 2);
-        c.strokeStyle = 'rgba(255,130,0,' + (0.55 * (1 - r / 210)).toFixed(3) + ')';
-        c.lineWidth = 2;
-        c.stroke();
-      }
-      c.fillStyle = ACCENT;
-      c.beginPath(); c.arc(cx, cy, 6, 0, Math.PI * 2); c.fill();
-
-      centerText(c, 'Scanning…', 440, '600 17px ' + FONT, FG);
-      this.addButton(c, 110, 620, 140, 48, 'CANCEL', 'ghost', function () { this.setState('idle'); });
-    },
-
-    drawDevices: function (c) {
-      c.fillStyle = SUB;
-      c.font = '500 13px ' + FONT;
-      c.fillText('Found devices', 20, 110);
-
-      var self = this;
-      for (var i = 0; i < this.devices.length; i++) {
-        (function (dev) {
-          var x = 20, y = 130, w = 320, h = 76;
-          roundRect(c, x, y, w, h, 12);
-          c.fillStyle = CARD;
-          c.fill();
-          c.strokeStyle = ACCENT;
-          c.lineWidth = 1.5;
-          c.stroke();
-          c.fillStyle = FG;
-          c.font = '600 16px ' + FONT;
-          c.fillText(dev.name, x + 16, y + 32);
-          c.fillStyle = SUB;
-          c.font = '500 12px ' + FONT;
-          c.fillText('RSSI ' + dev.rssi + ' dBm · ' + dev.id, x + 16, y + 54);
-          c.fillStyle = ACCENT;
-          c.font = '400 22px ' + FONT;
-          c.fillText('›', x + w - 26, y + 46);
-          self.hits.push({ x: x, y: y, w: w, h: h, fn: function () { this.pairWith(dev); } });
-        })(this.devices[i]);
-      }
-
-      this.addButton(c, 20, 620, 120, 48, 'BACK', 'ghost', function () { this.setState('idle'); });
-    },
-
-    drawPin: function (c) {
-      centerText(c, 'Enter PIN', 140, '700 19px ' + FONT, FG);
-      centerText(c, 'Confirm this code matches your Flipper', 168, '500 13px ' + FONT, SUB);
-
-      roundRect(c, 40, 200, 280, 96, 14);
-      c.fillStyle = CARD;
+    } else {
+      c.fillStyle = '#686967';
+      c.beginPath();
+      c.arc(329, 66, 3, 0, Math.PI * 2);
       c.fill();
-      c.strokeStyle = LINE;
-      c.lineWidth = 1.5;
-      c.stroke();
-
-      c.fillStyle = ACCENT;
-      c.font = '700 44px ' + MONO;
-      c.textAlign = 'center';
-      var digits = this.pin.split('');
-      var dw = 26, gap = 16, total = digits.length * dw + (digits.length - 1) * gap;
-      var sx = W / 2 - total / 2 + dw / 2;
-      for (var i = 0; i < digits.length; i++) c.fillText(digits[i], sx + i * (dw + gap), 266);
-      c.textAlign = 'left';
-
-      this.addButton(c, 40, 460, 280, 52, 'PAIR', 'primary', this.confirmPair);
-      centerText(c, 'Cancel', 560, '600 15px ' + FONT, SUB);
-      this.hits.push({ x: 140, y: 536, w: 80, h: 36, fn: this.cancelPair });
-      centerText(c, 'Then press OK on the Flipper', 640, '500 14px ' + FONT, '#C98A4B');
-    },
-
-    drawWaiting: function (c, now) {
-      var cx = W / 2, cy = 300;
-      for (var i = 0; i < 3; i++) {
-        var phase = ((now * 0.004) - i * 0.33) % 1;
-        if (phase < 0) phase += 1;
-        c.globalAlpha = (0.25 + 0.75 * Math.sin(phase * Math.PI)).toFixed(3);
-        c.fillStyle = ACCENT;
-        c.beginPath();
-        c.arc(cx - 30 + i * 30, cy, 8, 0, Math.PI * 2);
-        c.fill();
-      }
-      c.globalAlpha = 1;
-
-      centerText(c, 'Waiting for Flipper OK…', 390, '600 16px ' + FONT, FG);
-      centerText(c, 'PIN ' + this.pin, 424, '600 15px ' + MONO, SUB);
-      this.addButton(c, 110, 620, 140, 48, 'CANCEL', 'ghost', this.cancelPair);
-    },
-
-    drawConnected: function (c) {
-      var info = this.info;
-      this.addRow(c, 100, 'Device name', info ? info.name : this.deviceName, null);
-      this.addRow(c, 176, 'Battery', info ? info.battery + '%' : '…', info ? info.battery / 100 : null);
-      this.addRow(c, 252, 'Firmware', info ? info.firmware : '…', null);
-      this.addRow(c, 328, 'Storage',
-        info ? FZ.util.formatMB(info.storage.usedMB) + ' / ' + FZ.util.formatMB(info.storage.totalMB) : '…',
-        info ? info.storage.usedMB / info.storage.totalMB : null);
-
-      c.fillStyle = SUB;
-      c.font = '500 12px ' + FONT;
-      c.textAlign = 'center';
-      c.fillText('Link: ' + (FZ.link.get().rtt !== null ? FZ.link.get().rtt + ' ms RTT · ' : '') +
-                 'signal ' + this.signal + '/4 · RPC over simulated bus', W / 2, 430);
-      c.textAlign = 'left';
-
-      this.addButton(c, 40, 460, 280, 52, 'OPEN STORAGE', 'primary', this.openStorage);
-      this.addButton(c, 40, 528, 280, 48, 'FIND MY FLIPPER', 'ghost', this.findFlipper);
-      this.addButton(c, 40, 640, 280, 52, 'DISCONNECT', 'danger', this.disconnect);
-    },
-
-    /* ================= Stage 4: Storage screens ================= */
-    drawStorage: function (c) {
-      var st = this.st;
-      this.addButton(c, 16, 92, 56, 36, '‹ UP', 'ghost', this.upDir);
-      c.fillStyle = FG;
-      c.font = '700 16px ' + FONT;
-      c.fillText('Storage', 84, 118);
-      c.fillStyle = SUB;
-      c.font = '500 12px ' + FONT;
-      var pathStr = st.path.length > 30 ? '…' + st.path.slice(-29) : st.path;
-      c.fillText(pathStr, 16, 142);
-
-      if (st.loading || !st.entries) {
-        centerText(c, 'Loading…', 300, '500 15px ' + FONT, SUB);
-        return;
-      }
-      if (!st.entries.length) {
-        centerText(c, 'Empty folder', 300, '500 15px ' + FONT, SUB);
-        return;
-      }
-
-      var totalPages = Math.max(1, Math.ceil(st.entries.length / ROWS_PER_PAGE));
-      if (st.page >= totalPages) st.page = totalPages - 1;
-      var start = st.page * ROWS_PER_PAGE;
-      var self = this;
-      var y0 = 160;
-      for (var i = 0; i < ROWS_PER_PAGE; i++) {
-        var idx = start + i;
-        if (idx >= st.entries.length) break;
-        (function (e, y) {
-          var x = 16, w = 328, h = ROW_H - 8;
-          roundRect(c, x, y, w, h, 10);
-          c.fillStyle = CARD;
-          c.fill();
-          c.strokeStyle = LINE;
-          c.lineWidth = 1;
-          c.stroke();
-          c.fillStyle = e.dir ? ACCENT : FG;
-          c.font = '600 14px ' + FONT;
-          var label = (e.dir ? '▸ ' : '') + (e.name.length > 20 ? e.name.slice(0, 19) + '…' : e.name);
-          c.fillText(label, x + 14, y + h / 2 - 3);
-          if (!e.dir) {
-            c.fillStyle = SUB;
-            c.font = '500 11px ' + FONT;
-            c.fillText(fmtBytes(e.size), x + 14, y + h / 2 + 15);
+    }
+    stroke(
+      [
+        [20, 100],
+        [340, 100]
+      ],
+      line,
+      1
+    );
+  }
+  function nav() {
+    var conn = FZ.link.get().connected,
+      active =
+        phone.state === 'storage' || phone.state === 'reader' || phone.state === 'actions'
+          ? archive
+            ? 1
+            : 2
+          : 0;
+    c.fillStyle = bg;
+    c.fillRect(0, 670, 360, 90);
+    stroke(
+      [
+        [16, 670],
+        [344, 670]
+      ],
+      line,
+      1
+    );
+    ['Device', 'Archive', 'Files'].forEach(function (s, i) {
+      var col = i === active ? amber : conn ? '#a6a7a3' : '#666868';
+      icon(['device', 'archive', 'folder'][i], 50 + i * 120, 682, 22, col);
+      text(s, 60 + i * 120, 723, 12, col, 600, 'center');
+      hit(
+        i * 120,
+        672,
+        120,
+        59,
+        function () {
+          if (!conn) {
+            if (i && FZ.toast) FZ.toast('Pair a device to browse its virtual SD card');
+            return;
           }
-          /* row body opens / enters */
-          self.hits.push({ x: x, y: y, w: w - 48, h: h, fn: function () { if (e.dir) this.openDir(e.path); else this.loadView(e.path, false); } });
-          /* actions ("⋯") */
-          c.fillStyle = SUB;
-          c.font = '700 18px ' + FONT;
-          c.fillText('⋯', x + w - 34, y + h / 2 + 5);
-          self.hits.push({ x: x + w - 48, y: y, w: 48, h: h, fn: function () { this.openAct(e, 'storage'); } });
-        })(st.entries[idx], y0 + i * ROW_H);
-      }
-
-      if (totalPages > 1) {
-        c.fillStyle = SUB;
-        c.font = '500 12px ' + FONT;
-        c.textAlign = 'center';
-        c.fillText('Page ' + (st.page + 1) + ' / ' + totalPages, W / 2, 690);
-        c.textAlign = 'left';
-        if (st.page > 0) this.addButton(c, 16, 700, 100, 40, '‹ PREV', 'ghost', function () { this.st.page--; this.forceDraw = true; });
-        if (st.page < totalPages - 1) this.addButton(c, 244, 700, 100, 40, 'NEXT ›', 'ghost', function () { this.st.page++; this.forceDraw = true; });
-      }
-    },
-
-    drawStorageView: function (c) {
-      var v = this.st.view;
-      if (!v) { this.setState('storage'); return; }
-      this.addButton(c, 16, 92, 70, 36, '‹ BACK', 'ghost', function () { this.setState('storage'); });
-      var name = v.path.split('/').pop();
-      c.fillStyle = FG;
-      c.font = '700 15px ' + FONT;
-      c.fillText(name.length > 24 ? name.slice(0, 23) + '…' : name, 96, 116);
-
-      var boxY = 140, boxH = 380;
-      roundRect(c, 16, boxY, 328, boxH, 12);
-      c.fillStyle = CARD;
-      c.fill();
-      c.strokeStyle = LINE;
-      c.lineWidth = 1;
+          if (!i) state('connected');
+          else openStorage(i === 1);
+        },
+        s
+      );
+    });
+    box(135, 745, 90, 4, 2, '#b0b1af');
+  }
+  function radioGraphic(y, scanning, now) {
+    var x = 180;
+    var g = c.createRadialGradient(x, y, 0, x, y, 135);
+    g.addColorStop(0, '#3f2c1d');
+    g.addColorStop(0.55, '#29221d');
+    g.addColorStop(1, bg);
+    c.fillStyle = g;
+    c.fillRect(38, y - 135, 284, 270);
+    for (var i = 0; i < 3; i++) {
+      var r = 45 + i * 32 + (scanning && !FZ.flags.reducedMotion ? (now / 60) % 16 : 0);
+      c.beginPath();
+      c.arc(x, y, r, 0, Math.PI * 2);
+      c.strokeStyle = i === 0 ? '#654629' : i === 1 ? '#49382b' : '#392e25';
+      c.lineWidth = 1.4;
       c.stroke();
-
-      if (v.isImg) {
-        if (v.img) {
-          var iw = v.img.naturalWidth || 256, ih = v.img.naturalHeight || 128;
-          var sc = Math.min(296 / iw, (boxH - 32) / ih);
-          var w = Math.max(1, Math.round(iw * sc)), h = Math.max(1, Math.round(ih * sc));
-          try { c.drawImage(v.img, 16 + (328 - w) / 2, boxY + (boxH - h) / 2, w, h); } catch (e) {}
-        } else {
-          centerText(c, 'Loading image…', boxY + boxH / 2, '500 14px ' + FONT, SUB);
+    }
+    [
+      [-90, -62],
+      [56, -51],
+      [92, 60]
+    ].forEach(function (d) {
+      box(x + d[0] - 2, y + d[1] - 2, 4, 4, 2, '#ad743e');
+    });
+    c.save();
+    c.translate(x, y);
+    c.rotate(-0.17);
+    c.lineJoin = 'round';
+    stroke(
+      [
+        [-55, 4],
+        [-43, -17],
+        [-36, -21],
+        [39, -21],
+        [53, -7],
+        [53, 14],
+        [48, 19],
+        [-46, 19],
+        [-55, 10],
+        [-55, 4]
+      ],
+      amber,
+      2.5
+    );
+    box(-32, -12, 42, 23, 3, '#4b321c', amber);
+    box(17, -12, 18, 18, 9, null, amber);
+    box(23, -6, 5, 5, 2, amber);
+    box(39, 5, 5, 5, 2, null, amber);
+    c.restore();
+  }
+  function addHeading(kicker, title) {
+    text(kicker.toUpperCase(), 22, 132, 12, muted, 600, 'left', mono);
+    text(title, 20, 172, 30, ink, 700);
+  }
+  function idle(now) {
+    text('DEVICE CONNECTION', 22, 133, 12, muted, 600, 'left', mono);
+    radioGraphic(287, false, now);
+    text('Pair your Flipper', 180, 459, 34, ink, 700, 'center');
+    text('Connect to a device on your desk.', 180, 488, 16, muted, 450, 'center');
+    button(22, 562, 316, 54, 'Scan for devices', true, scan);
+  }
+  function discovery(now) {
+    addHeading('Device discovery', phone.state === 'scanning' ? 'Scanning…' : 'Nearby devices');
+    if (phone.state === 'scanning') {
+      radioGraphic(337, true, now);
+      text('Looking on the local bus…', 180, 510, 17, muted, 500, 'center');
+    } else {
+      phone.devices.forEach(function (dev, i) {
+        var y = 214 + i * 78;
+        box(20, y, 320, 68, 10, card, line);
+        icon('device', 32, y + 17, 31, amber);
+        text(dev.name, 76, y + 28, 20, ink, 650);
+        text('VIRTUAL FLIPPER ZERO', 76, y + 50, 12, muted, 500, 'left', mono);
+        text('›', 311, y + 39, 26, amber);
+        hit(
+          20,
+          y,
+          320,
+          68,
+          function () {
+            pairWith(dev);
+          },
+          dev.name
+        );
+      });
+    }
+    button(20, 588, 320, 48, 'Cancel', false, cancel);
+  }
+  function pairing() {
+    addHeading('Pairing request', 'Verify the PIN');
+    text('Check that both screens match.', 22, 211, 16, muted);
+    box(20, 261, 320, 106, 12, '#2b241d', '#55402e');
+    text(phone.pin, 180, 331, 46, amber, 650, 'center', mono);
+    button(20, 451, 320, 54, 'Confirm pairing', true, confirmPair);
+    button(20, 519, 320, 47, 'Cancel', false, cancel);
+  }
+  function dashboard() {
+    addHeading('Device dashboard', info ? info.name : phone.deviceName);
+    var rows = [
+      ['Battery', info ? info.battery + '%' : '…'],
+      ['Firmware', info ? info.firmware : '…'],
+      ['Virtual SD', info ? Math.ceil(info.storage.bytes / 1024) + ' KB / 128 MB' : '…']
+    ];
+    box(20, 196, 320, 172, 12, card, line);
+    rows.forEach(function (r, i) {
+      var y = 230 + i * 46;
+      text(r[0], 36, y, 15, muted);
+      text(r[1], 324, y, 16, ink, 600, 'right');
+    });
+    box(36, 338, 288, 5, 2, '#3a3b38');
+    if (info) box(36, 338, Math.max(2, (288 * info.storage.usedMB) / 128), 5, 1, amber);
+    button(
+      20,
+      391,
+      320,
+      48,
+      Date.now() < findUntil ? 'Locating device…' : 'Find my Flipper',
+      true,
+      find
+    );
+    button(20, 451, 320, 44, 'Firmware update', false, openFirmware);
+    button(20, 506, 320, 44, 'Rename device', false, function () {
+      openRename(null, info ? info.name : phone.deviceName);
+    });
+    button(20, 589, 320, 44, 'Disconnect', false, disconnect);
+  }
+  function listPage() {
+    addHeading(
+      archive ? 'Device archive' : 'File browser',
+      path === '/ext' ? (archive ? 'Categories' : 'Virtual SD') : path.split('/').pop()
+    );
+    text(path, 22, 200, 14, muted, 500, 'left', mono);
+    var list = entries || [];
+    if (!entries) text('Loading…', 22, 271, 17, muted);
+    else if (!list.length) text('This folder is empty.', 22, 271, 17, muted);
+    maxScroll = Math.max(0, list.length * 55 - 349);
+    scroll = FZ.util.clamp(scroll, 0, maxScroll);
+    c.save();
+    c.beginPath();
+    c.rect(16, 220, 328, 350);
+    c.clip();
+    list.forEach(function (e, i) {
+      var y = 222 + i * 55 - scroll;
+      if (y > 568 || y < 168) return;
+      icon(e.dir ? 'folder' : 'archive', 23, y + 13, 21, e.dir ? amber : muted);
+      text(e.name.slice(0, 26), 55, y + 30, 16, ink, 550);
+      text(e.dir ? '›' : '···', 321, y + 31, 20, muted, 650, 'center');
+      stroke(
+        [
+          [22, y + 51],
+          [338, y + 51]
+        ],
+        line,
+        1
+      );
+      var top = Math.max(220, y),
+        h = Math.max(0, Math.min(570, y + 52) - top);
+      hit(
+        18,
+        top,
+        280,
+        h,
+        function () {
+          if (e.dir) loadList(e.path);
+          else read(e.path);
+        },
+        e.name
+      );
+      hit(
+        301,
+        top,
+        38,
+        h,
+        function () {
+          file = e;
+          state('actions');
+        },
+        'Actions: ' + e.name
+      );
+    });
+    c.restore();
+    if (maxScroll) {
+      box(343, 220 + (scroll / maxScroll) * 220, 2, 130, 1, '#555652');
+    }
+    button(20, 593, 320, 44, path === '/ext' ? 'Dashboard' : 'Up one folder', false, function () {
+      up();
+    });
+  }
+  function filePage() {
+    var f = file;
+    if (!f) return;
+    addHeading('File preview', f.path.split('/').pop().slice(0, 20));
+    if (f.img) {
+      if (f.img.complete) c.drawImage(f.img, 20, 218, 320, 160);
+    } else {
+      var lines = f.lines || [];
+      maxScroll = Math.max(0, lines.length * 23 - 318);
+      scroll = FZ.util.clamp(scroll, 0, maxScroll);
+      c.save();
+      c.beginPath();
+      c.rect(20, 211, 320, 320);
+      c.clip();
+      lines.forEach(function (s, i) {
+        var y = 231 + i * 23 - scroll;
+        if (y > 197 && y < 552) text(s, 21, y, 15, ink, 450, 'left', mono);
+      });
+      c.restore();
+    }
+    button(20, 546, 320, 43, 'File actions', false, function () {
+      state('actions');
+    });
+    button(20, 602, 320, 42, 'Back to folder', false, function () {
+      loadList(path);
+    });
+  }
+  function actions() {
+    addHeading('File actions', (file.name || file.path.split('/').pop()).slice(0, 20));
+    button(20, 244, 320, 48, 'Rename', true, function () {
+      openRename(file.path, file.path.split('/').pop());
+    });
+    button(20, 309, 320, 48, 'Delete', false, function () {
+      state('delete');
+    });
+    button(20, 584, 320, 44, 'Back', false, function () {
+      loadList(path);
+    });
+  }
+  function removeFile() {
+    var target = file.path;
+    rpc('storage.delete', { path: target })
+      .then(function () {
+        if (!FZ.link.get().connected) return;
+        FZ.note('Removed ' + target.split('/').pop());
+        loadList(path);
+      })
+      .catch(err);
+  }
+  function openRename(target, name) {
+    renameTarget = target;
+    draft = name;
+    state('rename');
+  }
+  function commitRename() {
+    var target = renameTarget,
+      name = draft.trim();
+    if (!name) return err(Error('Enter a name'));
+    rpc(target ? 'storage.rename' : 'system.rename', { path: target, name: name })
+      .then(function () {
+        if (!FZ.link.get().connected) return;
+        if (target) loadList(path);
+        else {
+          state('connected');
+          requestInfo();
         }
-      } else {
-        c.fillStyle = FG;
-        c.font = '13px ' + MONO;
-        var visible = Math.floor((boxH - 32) / 20);
-        for (var i = 0; i < visible; i++) {
-          var li = v.scroll + i;
-          if (li >= v.lines.length) break;
-          var line = v.lines[li];
-          c.fillText(line.length > 36 ? line.slice(0, 35) + '…' : line, 30, boxY + 26 + i * 20);
-        }
-        if (v.lines.length > visible) {
-          if (v.scroll > 0) this.addButton(c, 16, boxY + boxH + 10, 100, 36, '▲ UP', 'ghost', function () { this.st.view.scroll = Math.max(0, this.st.view.scroll - visible); this.forceDraw = true; });
-          if (v.scroll + visible < v.lines.length) this.addButton(c, 244, boxY + boxH + 10, 100, 36, '▼ DOWN', 'ghost', function () { this.st.view.scroll += visible; this.forceDraw = true; });
-        }
+      })
+      .catch(err);
+  }
+  function renameView() {
+    addHeading('Text editor', renameTarget ? 'Rename file' : 'Device name');
+    box(20, 209, 320, 61, 8, card, line);
+    text(draft.slice(-27) + '_', 32, 247, 19, amber, 500, 'left', mono);
+    ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '_- .'].forEach(function (row, i) {
+      var y = 296 + i * 44,
+        w = 31,
+        x = (360 - row.length * w) / 2;
+      row.split('').forEach(function (ch, j) {
+        box(x + j * w, y, w - 3, 36, 5, card);
+        text(ch === ' ' ? '␣' : ch, x + j * w + 14, y + 24, 16, ink, 500, 'center');
+        hit(
+          x + j * w,
+          y,
+          w,
+          39,
+          function () {
+            phone.type(ch);
+          },
+          ch
+        );
+      });
+    });
+    button(20, 526, 104, 43, 'Backspace', false, function () {
+      phone.type('Backspace');
+    });
+    button(134, 526, 206, 43, 'Save name', true, commitRename);
+    button(20, 595, 320, 41, 'Cancel', false, function () {
+      if (renameTarget) loadList(path);
+      else state('connected');
+    });
+  }
+  function firmwareView() {
+    addHeading('Firmware wizard', 'System update');
+    var cur = info && info.firmware,
+      done = cur === '1.1.0-sim';
+    text('Installed: ' + (cur || '…'), 22, 215, 16, muted);
+    text('Local release: 1.1.0-sim', 22, 244, 16, muted);
+    if (progress) {
+      box(20, 286, 320, 118, 12, card, line);
+      text(progress.stage, 36, 326, 21, ink, 650);
+      text(progress.percent + '%', 323, 326, 17, amber, 600, 'right');
+      box(36, 357, 286, 5, 2, '#383936');
+      box(36, 357, Math.max(2, (286 * progress.percent) / 100), 5, 2, amber);
+    } else {
+      text(
+        done ? 'Your device is up to date.' : 'A simulated release is available.',
+        22,
+        318,
+        17,
+        ink
+      );
+      if (!done) button(20, 389, 320, 50, 'Install local update', true, startFirmware);
+    }
+    button(20, 588, 320, 46, 'Dashboard', false, function () {
+      state('connected');
+      requestInfo();
+    });
+  }
+  function draw(now) {
+    if (!sc) return;
+    c = sc.begin();
+    hits.length = 0;
+    c.fillStyle = phone.off ? '#050505' : bg;
+    c.fillRect(0, 0, 360, 760);
+    if (!phone.off) {
+      chrome(now);
+      switch (phone.state) {
+        case 'idle':
+          idle(now);
+          break;
+        case 'scanning':
+        case 'devices':
+          discovery(now);
+          break;
+        case 'pin':
+          pairing();
+          break;
+        case 'connected':
+          dashboard();
+          break;
+        case 'storage':
+          listPage();
+          break;
+        case 'reader':
+          filePage();
+          break;
+        case 'actions':
+          actions();
+          break;
+        case 'delete':
+          addHeading('Confirm deletion', 'Delete this item?');
+          text((file.name || file.path.split('/').pop()).slice(0, 25), 22, 225, 18, ink);
+          text('This cannot be undone.', 22, 264, 15, muted);
+          button(20, 341, 320, 50, 'Delete from SD', true, removeFile);
+          button(20, 404, 320, 46, 'Keep item', false, function () {
+            state('actions');
+          });
+          break;
+        case 'rename':
+          renameView();
+          break;
+        case 'firmware':
+          firmwareView();
+          break;
       }
-
-      this.addButton(c, 20, 580, 150, 48, 'RENAME', 'ghost', function () { this.openAct({ path: this.st.view.path, dir: false }, 'storage-view'); });
-      this.addButton(c, 190, 580, 150, 48, 'DELETE', 'danger', function () { this.openAct({ path: this.st.view.path, dir: false }, 'storage-view'); this.startDel(); });
-    },
-
-    drawStorageAct: function (c) {
-      var a = this.st.act;
-      if (!a) { this.setState('storage'); return; }
-      centerText(c, 'Actions', 140, '700 19px ' + FONT, FG);
-      centerText(c, a.path.split('/').pop(), 166, '500 13px ' + FONT, SUB);
-      this.addButton(c, 40, 220, 280, 56, 'RENAME', 'primary', this.startRen);
-      this.addButton(c, 40, 288, 280, 56, 'DELETE', 'danger', this.startDel);
-      this.addButton(c, 40, 356, 280, 52, 'CANCEL', 'ghost', function () { this.setState(this.st.act.from); });
-    },
-
-    drawStorageRen: function (c) {
-      var r = this.st.ren;
-      if (!r) { this.setState('storage'); return; }
-      centerText(c, 'Rename', 110, '700 18px ' + FONT, FG);
-
-      roundRect(c, 30, 134, 300, 50, 10);
-      c.fillStyle = CARD;
-      c.fill();
-      c.strokeStyle = ACCENT;
-      c.lineWidth = 1.5;
-      c.stroke();
-      c.fillStyle = FG;
-      c.font = '600 16px ' + MONO;
-      var shown = r.buf.join('') || ' ';
-      c.fillText(shown.length > 26 ? '…' + shown.slice(-25) : shown, 44, 166);
-
-      var self = this;
-      var kx = 10, ky = 204, kw = (W - 20) / 10, kh = 42, gap = 4;
-      for (var row = 0; row < KEYROWS.length; row++) {
-        var keys = KEYROWS[row];
-        var rowW = keys.length * kw;
-        var rx = (W - rowW) / 2;
-        for (var i = 0; i < keys.length; i++) {
-          (function (ch, x, y) {
-            roundRect(c, x, y, kw - gap, kh - gap, 6);
-            c.fillStyle = CARD;
-            c.fill();
-            c.strokeStyle = LINE;
-            c.lineWidth = 1;
-            c.stroke();
-            c.fillStyle = FG;
-            c.font = '600 14px ' + FONT;
-            c.textAlign = 'center';
-            c.fillText(ch, x + (kw - gap) / 2, y + (kh - gap) / 2 + 5);
-            c.textAlign = 'left';
-            self.hits.push({
-              x: x, y: y, w: kw - gap, h: kh - gap,
-              fn: function () { if (this.st.ren.buf.length < 24) { this.st.ren.buf.push(ch); this.forceDraw = true; FZ.audio.click(); } }
-            });
-          })(keys.charAt(i), rx + i * kw, ky + row * kh);
-        }
+      nav();
+      if (notice) {
+        box(15, 639, 330, 27, 5, '#483624');
+        text(notice.slice(0, 38), 26, 657, 13, '#ffcea3');
       }
-
-      var belowY = ky + KEYROWS.length * kh + 10;
-      this.addButton(c, 16, belowY, 100, 46, '⌫ DEL', 'ghost', function () { this.st.ren.buf.pop(); this.forceDraw = true; });
-      this.addButton(c, 130, belowY, 100, 46, 'CANCEL', 'ghost', function () { this.setState(this.st.ren.from); });
-      this.addButton(c, 244, belowY, 100, 46, 'SAVE', 'primary', this.commitRen);
-    },
-
-    drawStorageDel: function (c) {
-      var d = this.st.del;
-      if (!d) { this.setState('storage'); return; }
-      centerText(c, 'Delete file?', 260, '700 20px ' + FONT, FG);
-      centerText(c, d.path.split('/').pop(), 292, '500 14px ' + FONT, SUB);
-      centerText(c, 'This cannot be undone.', 320, '500 13px ' + FONT, SUB);
-      this.addButton(c, 40, 380, 280, 52, 'DELETE', 'danger', this.commitDel);
-      this.addButton(c, 40, 448, 280, 52, 'CANCEL', 'ghost', function () { this.setState(this.st.del.from); });
-    },
-
-    drawVolume: function (c) {
-      roundRect(c, 80, 540, 200, 64, 14);
-      c.fillStyle = 'rgba(23,23,28,0.96)';
-      c.fill();
-      c.strokeStyle = LINE;
-      c.lineWidth = 1;
-      c.stroke();
-      c.fillStyle = FG;
-      c.font = '600 13px ' + FONT;
-      c.fillText('Volume', 98, 578);
-      var segs = 4, lit = Math.round(FZ.audio.getVolume() * segs);
-      for (var i = 0; i < segs; i++) {
-        roundRect(c, 170 + i * 24, 564, 18, 16, 4);
-        c.fillStyle = i < lit ? ACCENT : '#26262C';
-        c.fill();
+      if (volumeUntil > now) {
+        box(80, 101, 200, 36, 8, card, line);
+        text(
+          'Volume ' + Math.round(FZ.audio.getVolume() * 100) + '%',
+          180,
+          124,
+          16,
+          ink,
+          600,
+          'center'
+        );
       }
     }
-  };
-
-  FZ.phone = phone;
-})();
+    sc.markDirty();
+    needs = false;
+    last = now;
+  }
+  function requestInfo() {
+    var e = epoch,
+      serial = ++infoSeq;
+    return rpc('system.info')
+      .then(function (v) {
+        if (e !== epoch || serial !== infoSeq || !FZ.link.get().connected) return;
+        info = v;
+        phone.deviceName = v.name;
+        publish();
+      })
+      .catch(err);
+  }
+  function scan() {
+    phone.off = false;
+    var token = ++seq;
+    state('scanning');
+    FZ.note('Scanning the local bus');
+    return rpc('link.scan')
+      .then(function (v) {
+        if (seq !== token || phone.state !== 'scanning') return;
+        phone.devices = v.devices;
+        state('devices');
+        FZ.note('Virtual Flipper discovered');
+      })
+      .catch(function (e) {
+        if (seq === token) {
+          state('idle');
+          err(e);
+        }
+      });
+  }
+  function pairWith(dev) {
+    if (!dev) return;
+    var token = ++seq;
+    return rpc('link.pair.request', { id: dev.id })
+      .then(function (v) {
+        if (seq !== token) return;
+        phone.pin = v.pin;
+        phone.deviceName = v.name;
+        state('pin');
+        FZ.note('Pairing code issued');
+      })
+      .catch(err);
+  }
+  function confirmPair() {
+    if (phone.state !== 'pin') return;
+    return rpc('link.pair.accept', { pin: phone.pin }).catch(err);
+  }
+  function cancel() {
+    seq++;
+    phone.pin = '';
+    state('idle');
+    rpc('link.pair.abort').catch(err);
+  }
+  function disconnect() {
+    return rpc('link.disconnect').catch(function () {
+      FZ.link.establish({ connected: false });
+    });
+  }
+  function loadList(p, silent) {
+    if (!silent) {
+      entries = null;
+      state('storage');
+    }
+    path = p;
+    var t = ++viewToken;
+    return rpc('storage.list', { path: p })
+      .then(function (v) {
+        if (t !== viewToken || phone.state !== 'storage') return;
+        entries = v.entries.filter(function (e) {
+          return !(archive && p === '/ext' && !e.dir);
+        });
+        dirty();
+      })
+      .catch(function (e) {
+        if (t !== viewToken) return;
+        if (silent && p !== '/ext') return loadList('/ext');
+        entries = [];
+        err(e);
+      });
+  }
+  function openStorage(a) {
+    archive = !!a;
+    return loadList('/ext');
+  }
+  function up() {
+    if (path === '/ext') state('connected');
+    else loadList(path.slice(0, path.lastIndexOf('/')) || '/ext');
+  }
+  function read(p) {
+    var t = ++viewToken;
+    return rpc('storage.read', { path: p })
+      .then(function (v) {
+        if (t !== viewToken) return;
+        file = { path: p, name: p.split('/').pop(), lines: [] };
+        if (/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(v.data)) {
+          file.img = new Image();
+          file.img.onload = dirty;
+          file.img.src = v.data;
+        } else
+          file.lines = v.data.split('\n').flatMap(function (s) {
+            return s.match(/.{1,32}/g) || [''];
+          });
+        state('reader');
+      })
+      .catch(err);
+  }
+  function find() {
+    return rpc('app.find')
+      .then(function () {
+        findUntil = Date.now() + 2600;
+        dirty();
+        FZ.note('Locating Flipper Zero');
+      })
+      .catch(err);
+  }
+  function openFirmware() {
+    state('firmware');
+    requestInfo();
+    rpc('firmware.update.progress')
+      .then(function (v) {
+        progress = v;
+        dirty();
+      })
+      .catch(err);
+  }
+  function startFirmware() {
+    return rpc('firmware.update.start')
+      .then(function (v) {
+        progress = v;
+        dirty();
+      })
+      .catch(err);
+  }
+  var phone = (FZ.phone = {
+    state: 'idle',
+    off: false,
+    pin: '',
+    signal: 0,
+    devices: [],
+    deviceName: 'Flipper Zero',
+    moved: false,
+    init: function (screen) {
+      sc = this.screen = screen;
+      FZ.link.attach('phone', {
+        'link.status': function (v) {
+          epoch++;
+          seq++;
+          phone.pin = '';
+          info = null;
+          progress = null;
+          if (v.connected) {
+            phone.deviceName = v.name;
+            phone.signal = v.signal;
+            state('connected');
+            requestInfo();
+            FZ.note('Device link established');
+          } else {
+            state('idle');
+            FZ.note('Device link closed');
+          }
+        },
+        'link.signal': function (v) {
+          phone.signal = v.signal;
+          if (v.connected) dirty();
+        },
+        'link.pair.cancel': function () {
+          state('idle');
+        },
+        'system.changed': function () {
+          if (FZ.link.get().connected) requestInfo();
+        },
+        'storage.changed': function (v) {
+          requestInfo();
+          if (phone.state === 'storage') loadList(path, true);
+          else if (
+            file &&
+            file.path === v.path &&
+            ['reader', 'actions', 'delete', 'rename'].indexOf(phone.state) >= 0
+          )
+            loadList(path);
+        },
+        'firmware.update.progress': function (v) {
+          progress = v.percent >= 100 ? null : v;
+          if (!progress) requestInfo();
+          dirty();
+        }
+      });
+      publish();
+    },
+    tick: function (now) {
+      var minute = Math.floor(Date.now() / 60000);
+      if (minute !== clockMinute) {
+        clockMinute = minute;
+        needs = true;
+      }
+      if (volumeUntil && now > volumeUntil) {
+        volumeUntil = 0;
+        needs = true;
+      }
+      if (findUntil && Date.now() > findUntil) {
+        findUntil = 0;
+        needs = true;
+      }
+      var anim = !this.off && this.state === 'scanning' && !FZ.flags.reducedMotion;
+      if ((needs || (anim && now > next)) && now - last >= 33.34) {
+        draw(now);
+        next = now + 100;
+      }
+    },
+    nextWake: function (now) {
+      var delay = 60000 - (Date.now() % 60000);
+      if (needs) return Math.max(1, 34 - (now - last));
+      if (!this.off && this.state === 'scanning' && !FZ.flags.reducedMotion)
+        delay = Math.min(delay, next - now);
+      if (volumeUntil) delay = Math.min(delay, volumeUntil - now + 1);
+      if (findUntil) delay = Math.min(delay, findUntil - Date.now() + 1);
+      return Math.max(1, delay);
+    },
+    pointer: function (type, x, y) {
+      if (type === 'down') {
+        this.moved = false;
+        startY = y;
+        scroll0 = scroll;
+      } else if (type === 'move') {
+        this.moved = true;
+        scroll = FZ.util.clamp(scroll0 + startY - y, 0, maxScroll);
+        dirty();
+      } else if (!this.moved) this.tap(x, y);
+    },
+    tap: function (x, y) {
+      if (this.off) {
+        this.onSide('power');
+        return;
+      }
+      if (needs) draw(FZ.util.now());
+      for (var i = hits.length - 1; i >= 0; i--) {
+        var h = hits[i];
+        if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) {
+          FZ.audio.click();
+          h.fn();
+          break;
+        }
+      }
+    },
+    onSide: function (k) {
+      if (k === 'power') {
+        this.off = !this.off;
+        FZ.note(this.off ? 'Phone display asleep' : 'Phone display awake');
+      } else {
+        FZ.audio.setVolume(FZ.audio.getVolume() + (k === 'vol_up' ? 0.1 : -0.1));
+        volumeUntil = FZ.util.now() + 1000;
+      }
+      publish();
+    },
+    type: function (k) {
+      if (this.state !== 'rename' || this.off) return false;
+      if (k === 'Backspace') draft = draft.slice(0, -1);
+      else if (/^[a-zA-Z0-9 _.-]$/.test(k)) draft = (draft + k).slice(0, renameTarget ? 64 : 18);
+      else if (k === 'Enter') commitRename();
+      else return false;
+      dirty();
+      return true;
+    },
+    dashboard: function () {
+      state('connected');
+      requestInfo();
+    },
+    scan: scan,
+    pairWith: pairWith,
+    confirmPair: confirmPair,
+    cancelPair: cancel,
+    disconnect: disconnect,
+    openStorage: openStorage,
+    loadList: loadList,
+    read: read,
+    findFlipper: find,
+    openFirmware: openFirmware,
+    get info() {
+      return info;
+    },
+    get entries() {
+      return entries;
+    },
+    get path() {
+      return path;
+    },
+    get hits() {
+      return hits;
+    },
+    get scroll() {
+      return scroll;
+    },
+    get progress() {
+      return progress;
+    }
+  });
+})(window.FZ);
