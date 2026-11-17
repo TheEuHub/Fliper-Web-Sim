@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>Fliper Web Sim — offline Flipper Zero + phone simulator</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="missing" class="missing" hidden>
+  <div class="missing-card">
+    <h1 id="missing-title">Missing dependency</h1>
+    <p id="missing-detail"></p>
+  </div>
+</div>
+
+<header id="topbar" class="topbar">
+  <div class="brand">Fliper Web Sim<span class="badge">fan sim · simulation only</span></div>
+  <div class="tools">
+    <div class="seg" id="layout-seg" role="group" aria-label="Camera layout">
+      <button type="button" data-layout="both" class="on">Both</button>
+      <button type="button" data-layout="flipper">Flipper</button>
+      <button type="button" data-layout="phone">Phone</button>
+    </div>
+    <span class="sel-label">Models</span>
+    <select id="model-flipper" class="model-select" aria-label="Flipper model"></select>
+    <select id="model-phone" class="model-select" aria-label="Phone model"></select>
+    <button type="button" id="btn-help">Help</button>
+    <button type="button" id="btn-sound">Sound: off</button>
+    <button type="button" id="btn-reset">Reset storage</button>
+    <button type="button" id="btn-debug">Link debug</button>
+  </div>
+</header>
+
+<main id="stage">
+  <canvas id="gl"></canvas>
+
+  <div id="hint" class="hint">Drag desk to orbit · drag a device to lift · scroll / pinch to zoom · double-click to reset · arrows / Enter / Esc drive the Flipper</div>
+
+  <div id="debug-panel" class="panel" hidden>
+    <div class="panel-head">
+      <span>Link debug</span>
+      <button type="button" id="debug-close" class="icon-btn" aria-label="Close">×</button>
+    </div>
+    <div class="panel-grid">
+      <span>State</span><span id="dbg-state">-</span>
+      <span>Signal</span><span id="dbg-signal">-</span>
+      <span>Latency</span><span>30–120 ms</span>
+      <span>Messages</span><span id="dbg-counts">0 sent · 0 dropped</span>
+      <span>Last RTT</span><span id="dbg-rtt">-</span>
+    </div>
+    <label class="panel-row">Packet loss
+      <select id="dbg-loss">
+        <option value="0">0%</option>
+        <option value="0.1">10%</option>
+        <option value="0.3">30%</option>
+      </select>
+    </label>
+    <div class="panel-row">
+      <button type="button" id="dbg-ping">Ping</button>
+      <span class="panel-note">simulated RPC · no radio</span>
+    </div>
+    <pre id="dbg-log" class="dbg-log"></pre>
+  </div>
+
+  <div id="help-overlay" class="overlay" hidden>
+    <div class="overlay-card">
+      <div class="overlay-head">
+        <span>Controls</span>
+        <button type="button" id="help-close" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <ul class="help-list">
+        <li><b>Drag empty desk</b> — orbit the camera</li>
+        <li><b>Drag a device</b> — lift and rotate it freely; it eases back on release</li>
+        <li><b>Scroll / pinch</b> — zoom</li>
+        <li><b>Double-click / double-tap</b> — reset the view</li>
+        <li><b>Click Flipper buttons</b> (D-pad, OK, Back) or use <b>↑ ↓ ← → / Enter / Esc</b></li>
+        <li><b>OK on the Flipper home screen</b> — opens the menu: File Manager, Screenshot, Storage</li>
+        <li><b>File Manager</b> — ↑↓ move, OK open/view, → actions (rename/delete), ← up a folder, Back exits</li>
+        <li><b>Bad USB</b> (menu) — ↑↓ pick a demo script, OK plays it back on the LCD (OK again skips a step, Back stops). UI-only: it never sends real keystrokes anywhere</li>
+        <li><b>Tap the phone screen</b> — use the companion app; side buttons sleep/wake and adjust volume</li>
+        <li><b>Layout toggle</b> — dollies the camera between Both / Flipper / Phone</li>
+        <li><b>Models</b> — switch the 3D model used per device</li>
+        <li><b>Link debug</b> — watch the simulated RPC bus, force packet loss, ping</li>
+      </ul>
+      <p class="overlay-note">Unofficial fan project. All radio, NFC, USB and firmware behaviour is simulated in-page. No real hardware, no network calls, no telemetry.</p>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+</main>
+
+<script src="vendor/three.min.js"></script>
+<script src="js/core.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/screen.js"></script>
+<script src="js/link.js"></script>
+<script src="js/flipper-fs.js"></script>
+<script src="js/flipper-os.js"></script>
+<script src="js/phone-app.js"></script>
+<script src="js/models.js"></script>
+<script src="models/flipper-model.js"></script>
+<script src="js/scene.js"></script>
+<script src="js/ui.js"></script>
+</body>
+</html>
