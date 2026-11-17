@@ -1,7 +1,11 @@
 /* Fliper Web Sim — phone-app: re-implementation of the Flipper companion
    app (original code). Dark theme, orange accent, system font stack.
    The phone NEVER reads Flipper state directly: it sends RPC requests
-   through link.js and renders responses and events. */
+   through link.js and renders responses and events.
+   Stage 4 adds a Storage screen (browse / view / rename / delete the
+   virtual SD card entirely over fs.* RPC calls) kept in sync with the
+   Flipper's own file manager via fs.changed push events, plus a
+   Find My Flipper button that flashes the Flipper's LCD. */
 (function () {
   'use strict';
   var FZ = window.FZ;
@@ -28,6 +32,12 @@
     c.closePath();
   }
 
+  function fmtBytes(n) {
+    if (n < 1000) return n + ' B';
+    if (n < 1000000) return (n / 1000).toFixed(1) + ' KB';
+    return (n / 1000000).toFixed(1) + ' MB';
+  }
+
   function centerText(c, str, y, font, color) {
     c.font = font;
     c.fillStyle = color;
@@ -37,9 +47,13 @@
     c.textAlign = 'left';
   }
 
+  var ROW_H = 58, ROWS_PER_PAGE = 7;
+  var KEYROWS = ['1234567890', 'qwertyuiop', 'asdfghjkl', 'zxcvbnm', '_-().'];
+
   var phone = {
     screen: null,
-    state: 'idle',        /* idle | scanning | devices | pin | waiting | connected */
+    state: 'idle',        /* idle | scanning | devices | pin | waiting | connected
+                              | storage | storage-view | storage-act | storage-ren | storage-del */
     off: false,
     pin: '',
     deviceName: 'Flipper Zero',
@@ -51,6 +65,17 @@
     downX: 0, downY: 0, moved: false,
     volT0: -1e9,
     forceDraw: true,
+    findT0: -1e9,
+    findBusy: false,
+
+    /* ---------- Stage 4: Storage screen state ---------- */
+    st: {
+      path: '/ext', entries: null, page: 0, loading: false, backTo: 'connected',
+      view: null,        /* {path, data, isImg, img, lines, scroll} */
+      act: null,         /* {path, dir, sel, from} */
+      ren: null,         /* {path, buf, from} */
+      del: null          /* {path, from} */
+    },
 
     dirty: function () { if (this.screen) this.screen.markDirty(); },
 
@@ -90,11 +115,136 @@
         },
         'link.pair.retry': function () {
           if (self.state === 'waiting') self.setState('pin');
+        },
+
+        /* Stage 4: pushed whenever the virtual SD card changes anywhere
+           (on-device file manager or a phone RPC) — refresh within ~1 s
+           if the Storage screen is currently looking at affected data. */
+        'fs.changed': function () {
+          self.onFsChanged();
         }
       });
 
       this.forceDraw = true;
       this.draw(FZ.util.now());
+    },
+
+    /* ---------- Stage 4: Storage screen (over fs.* RPC) ---------- */
+    onFsChanged: function () {
+      var s = this.state;
+      if (s === 'storage') this.loadList(this.st.path, true);
+      else if (s === 'storage-view' && this.st.view) this.loadView(this.st.view.path, true);
+    },
+
+    openStorage: function () {
+      this.st.backTo = 'connected';
+      this.loadList('/ext', false);
+      this.setState('storage');
+    },
+
+    loadList: function (path, silent) {
+      var self = this;
+      var st = this.st;
+      if (!silent) { st.loading = true; st.entries = null; this.forceDraw = true; this.draw(FZ.util.now()); }
+      FZ.link.request('phone', 'fs.list', { path: path }, function (err, payload) {
+        st.loading = false;
+        if (err) { if (!silent && FZ.toast) FZ.toast('Storage error: ' + err); return; }
+        st.path = payload.path;
+        st.entries = payload.entries;
+        if (!silent) st.page = 0;
+        self.dirty();
+      });
+    },
+
+    openDir: function (path) {
+      this.st.page = 0;
+      this.loadList(path, false);
+    },
+
+    upDir: function () {
+      var p = this.st.path;
+      if (p === '/ext') { this.setState(this.st.backTo); return; }
+      var parts = p.split('/');
+      parts.pop();
+      this.openDir(parts.join('/') || '/ext');
+    },
+
+    loadView: function (path, silent) {
+      var self = this;
+      var st = this.st;
+      if (!silent) { st.view = { path: path, data: null, isImg: false, img: null, lines: [], scroll: 0 }; this.setState('storage-view'); }
+      FZ.link.request('phone', 'fs.read', { path: path }, function (err, payload) {
+        if (err) { if (FZ.toast) FZ.toast('Could not read file: ' + err); if (!silent) self.setState('storage'); return; }
+        var isImg = payload.data.indexOf('data:image/') === 0;
+        var v = { path: payload.path, data: payload.data, isImg: isImg, img: null, lines: isImg ? [] : payload.data.split('\n'), scroll: 0 };
+        if (st.view && st.view.path === payload.path) v.scroll = st.view.scroll;
+        st.view = v;
+        if (isImg && typeof Image !== 'undefined') {
+          var img = new Image();
+          img.onload = function () { v.img = img; self.dirty(); };
+          img.src = payload.data;
+        }
+        self.dirty();
+      });
+    },
+
+    openAct: function (entry, from) {
+      this.st.act = { path: entry.path, dir: entry.dir, sel: 0, from: from };
+      this.setState('storage-act');
+    },
+
+    startRen: function () {
+      var a = this.st.act;
+      if (!a) return;
+      var name = a.path.split('/').pop().toLowerCase();
+      this.st.ren = { path: a.path, buf: name.split(''), from: a.from };
+      this.setState('storage-ren');
+    },
+
+    commitRen: function () {
+      var self = this;
+      var r = this.st.ren;
+      if (!r || !r.buf.length) { if (FZ.toast) FZ.toast('Name cannot be empty'); return; }
+      FZ.link.request('phone', 'fs.rename', { path: r.path, name: r.buf.join('') }, function (err, payload) {
+        if (err) { if (FZ.toast) FZ.toast('Rename failed: ' + err); return; }
+        FZ.audio.ok();
+        if (r.from === 'storage-view') { self.loadView(payload.path, false); }
+        else { self.loadList(self.st.path, false); self.setState('storage'); }
+      });
+    },
+
+    startDel: function () {
+      var a = this.st.act;
+      if (!a) return;
+      this.st.del = { path: a.path, from: a.from };
+      this.setState('storage-del');
+    },
+
+    commitDel: function () {
+      var self = this;
+      var d = this.st.del;
+      if (!d) return;
+      FZ.link.request('phone', 'fs.remove', { path: d.path }, function (err) {
+        if (err) { if (FZ.toast) FZ.toast('Delete failed: ' + err); self.setState(d.from); return; }
+        FZ.audio.beep(330, 0.08, 0.08);
+        self.loadList(self.st.path, false);
+        self.setState('storage');
+      });
+    },
+
+    /* ---------- Stage 4: find my Flipper ---------- */
+    findFlipper: function () {
+      var self = this;
+      if (this.findBusy) return;
+      this.findBusy = true;
+      FZ.link.request('phone', 'find.flipper', {}, function (err) {
+        self.findBusy = false;
+        if (err) { if (FZ.toast) FZ.toast('Find failed: ' + err); return; }
+        self.findT0 = FZ.util.now();
+        if (FZ.toast) FZ.toast('Flashing the Flipper screen…');
+        self.forceDraw = true;
+        self.draw(FZ.util.now());
+      });
     },
 
     requestInfo: function () {
@@ -285,7 +435,7 @@
       c.fillStyle = SUB;
       c.font = '500 11px ' + FONT;
       c.fillText('SIM', 130, 42);
-      if (this.state === 'connected') {
+      if (this.state === 'connected' || this.state.indexOf('storage') === 0) {
         roundRect(c, 214, 18, 126, 30, 15);
         c.strokeStyle = ACCENT;
         c.lineWidth = 1.5;
@@ -302,6 +452,11 @@
         case 'pin': this.drawPin(c); break;
         case 'waiting': this.drawWaiting(c, now); break;
         case 'connected': this.drawConnected(c); break;
+        case 'storage': this.drawStorage(c); break;
+        case 'storage-view': this.drawStorageView(c); break;
+        case 'storage-act': this.drawStorageAct(c); break;
+        case 'storage-ren': this.drawStorageRen(c); break;
+        case 'storage-del': this.drawStorageDel(c); break;
         default: this.drawIdle(c); break;
       }
 
@@ -451,7 +606,191 @@
                  'signal ' + this.signal + '/4 · RPC over simulated bus', W / 2, 430);
       c.textAlign = 'left';
 
+      this.addButton(c, 40, 460, 280, 52, 'OPEN STORAGE', 'primary', this.openStorage);
+      this.addButton(c, 40, 528, 280, 48, 'FIND MY FLIPPER', 'ghost', this.findFlipper);
       this.addButton(c, 40, 640, 280, 52, 'DISCONNECT', 'danger', this.disconnect);
+    },
+
+    /* ================= Stage 4: Storage screens ================= */
+    drawStorage: function (c) {
+      var st = this.st;
+      this.addButton(c, 16, 92, 56, 36, '‹ UP', 'ghost', this.upDir);
+      c.fillStyle = FG;
+      c.font = '700 16px ' + FONT;
+      c.fillText('Storage', 84, 118);
+      c.fillStyle = SUB;
+      c.font = '500 12px ' + FONT;
+      var pathStr = st.path.length > 30 ? '…' + st.path.slice(-29) : st.path;
+      c.fillText(pathStr, 16, 142);
+
+      if (st.loading || !st.entries) {
+        centerText(c, 'Loading…', 300, '500 15px ' + FONT, SUB);
+        return;
+      }
+      if (!st.entries.length) {
+        centerText(c, 'Empty folder', 300, '500 15px ' + FONT, SUB);
+        return;
+      }
+
+      var totalPages = Math.max(1, Math.ceil(st.entries.length / ROWS_PER_PAGE));
+      if (st.page >= totalPages) st.page = totalPages - 1;
+      var start = st.page * ROWS_PER_PAGE;
+      var self = this;
+      var y0 = 160;
+      for (var i = 0; i < ROWS_PER_PAGE; i++) {
+        var idx = start + i;
+        if (idx >= st.entries.length) break;
+        (function (e, y) {
+          var x = 16, w = 328, h = ROW_H - 8;
+          roundRect(c, x, y, w, h, 10);
+          c.fillStyle = CARD;
+          c.fill();
+          c.strokeStyle = LINE;
+          c.lineWidth = 1;
+          c.stroke();
+          c.fillStyle = e.dir ? ACCENT : FG;
+          c.font = '600 14px ' + FONT;
+          var label = (e.dir ? '▸ ' : '') + (e.name.length > 20 ? e.name.slice(0, 19) + '…' : e.name);
+          c.fillText(label, x + 14, y + h / 2 - 3);
+          if (!e.dir) {
+            c.fillStyle = SUB;
+            c.font = '500 11px ' + FONT;
+            c.fillText(fmtBytes(e.size), x + 14, y + h / 2 + 15);
+          }
+          /* row body opens / enters */
+          self.hits.push({ x: x, y: y, w: w - 48, h: h, fn: function () { if (e.dir) this.openDir(e.path); else this.loadView(e.path, false); } });
+          /* actions ("⋯") */
+          c.fillStyle = SUB;
+          c.font = '700 18px ' + FONT;
+          c.fillText('⋯', x + w - 34, y + h / 2 + 5);
+          self.hits.push({ x: x + w - 48, y: y, w: 48, h: h, fn: function () { this.openAct(e, 'storage'); } });
+        })(st.entries[idx], y0 + i * ROW_H);
+      }
+
+      if (totalPages > 1) {
+        c.fillStyle = SUB;
+        c.font = '500 12px ' + FONT;
+        c.textAlign = 'center';
+        c.fillText('Page ' + (st.page + 1) + ' / ' + totalPages, W / 2, 690);
+        c.textAlign = 'left';
+        if (st.page > 0) this.addButton(c, 16, 700, 100, 40, '‹ PREV', 'ghost', function () { this.st.page--; this.forceDraw = true; });
+        if (st.page < totalPages - 1) this.addButton(c, 244, 700, 100, 40, 'NEXT ›', 'ghost', function () { this.st.page++; this.forceDraw = true; });
+      }
+    },
+
+    drawStorageView: function (c) {
+      var v = this.st.view;
+      if (!v) { this.setState('storage'); return; }
+      this.addButton(c, 16, 92, 70, 36, '‹ BACK', 'ghost', function () { this.setState('storage'); });
+      var name = v.path.split('/').pop();
+      c.fillStyle = FG;
+      c.font = '700 15px ' + FONT;
+      c.fillText(name.length > 24 ? name.slice(0, 23) + '…' : name, 96, 116);
+
+      var boxY = 140, boxH = 380;
+      roundRect(c, 16, boxY, 328, boxH, 12);
+      c.fillStyle = CARD;
+      c.fill();
+      c.strokeStyle = LINE;
+      c.lineWidth = 1;
+      c.stroke();
+
+      if (v.isImg) {
+        if (v.img) {
+          var iw = v.img.naturalWidth || 256, ih = v.img.naturalHeight || 128;
+          var sc = Math.min(296 / iw, (boxH - 32) / ih);
+          var w = Math.max(1, Math.round(iw * sc)), h = Math.max(1, Math.round(ih * sc));
+          try { c.drawImage(v.img, 16 + (328 - w) / 2, boxY + (boxH - h) / 2, w, h); } catch (e) {}
+        } else {
+          centerText(c, 'Loading image…', boxY + boxH / 2, '500 14px ' + FONT, SUB);
+        }
+      } else {
+        c.fillStyle = FG;
+        c.font = '13px ' + MONO;
+        var visible = Math.floor((boxH - 32) / 20);
+        for (var i = 0; i < visible; i++) {
+          var li = v.scroll + i;
+          if (li >= v.lines.length) break;
+          var line = v.lines[li];
+          c.fillText(line.length > 36 ? line.slice(0, 35) + '…' : line, 30, boxY + 26 + i * 20);
+        }
+        if (v.lines.length > visible) {
+          if (v.scroll > 0) this.addButton(c, 16, boxY + boxH + 10, 100, 36, '▲ UP', 'ghost', function () { this.st.view.scroll = Math.max(0, this.st.view.scroll - visible); this.forceDraw = true; });
+          if (v.scroll + visible < v.lines.length) this.addButton(c, 244, boxY + boxH + 10, 100, 36, '▼ DOWN', 'ghost', function () { this.st.view.scroll += visible; this.forceDraw = true; });
+        }
+      }
+
+      this.addButton(c, 20, 580, 150, 48, 'RENAME', 'ghost', function () { this.openAct({ path: this.st.view.path, dir: false }, 'storage-view'); });
+      this.addButton(c, 190, 580, 150, 48, 'DELETE', 'danger', function () { this.openAct({ path: this.st.view.path, dir: false }, 'storage-view'); this.startDel(); });
+    },
+
+    drawStorageAct: function (c) {
+      var a = this.st.act;
+      if (!a) { this.setState('storage'); return; }
+      centerText(c, 'Actions', 140, '700 19px ' + FONT, FG);
+      centerText(c, a.path.split('/').pop(), 166, '500 13px ' + FONT, SUB);
+      this.addButton(c, 40, 220, 280, 56, 'RENAME', 'primary', this.startRen);
+      this.addButton(c, 40, 288, 280, 56, 'DELETE', 'danger', this.startDel);
+      this.addButton(c, 40, 356, 280, 52, 'CANCEL', 'ghost', function () { this.setState(this.st.act.from); });
+    },
+
+    drawStorageRen: function (c) {
+      var r = this.st.ren;
+      if (!r) { this.setState('storage'); return; }
+      centerText(c, 'Rename', 110, '700 18px ' + FONT, FG);
+
+      roundRect(c, 30, 134, 300, 50, 10);
+      c.fillStyle = CARD;
+      c.fill();
+      c.strokeStyle = ACCENT;
+      c.lineWidth = 1.5;
+      c.stroke();
+      c.fillStyle = FG;
+      c.font = '600 16px ' + MONO;
+      var shown = r.buf.join('') || ' ';
+      c.fillText(shown.length > 26 ? '…' + shown.slice(-25) : shown, 44, 166);
+
+      var self = this;
+      var kx = 10, ky = 204, kw = (W - 20) / 10, kh = 42, gap = 4;
+      for (var row = 0; row < KEYROWS.length; row++) {
+        var keys = KEYROWS[row];
+        var rowW = keys.length * kw;
+        var rx = (W - rowW) / 2;
+        for (var i = 0; i < keys.length; i++) {
+          (function (ch, x, y) {
+            roundRect(c, x, y, kw - gap, kh - gap, 6);
+            c.fillStyle = CARD;
+            c.fill();
+            c.strokeStyle = LINE;
+            c.lineWidth = 1;
+            c.stroke();
+            c.fillStyle = FG;
+            c.font = '600 14px ' + FONT;
+            c.textAlign = 'center';
+            c.fillText(ch, x + (kw - gap) / 2, y + (kh - gap) / 2 + 5);
+            c.textAlign = 'left';
+            self.hits.push({
+              x: x, y: y, w: kw - gap, h: kh - gap,
+              fn: function () { if (this.st.ren.buf.length < 24) { this.st.ren.buf.push(ch); this.forceDraw = true; FZ.audio.click(); } }
+            });
+          })(keys.charAt(i), rx + i * kw, ky + row * kh);
+        }
+      }
+
+      var belowY = ky + KEYROWS.length * kh + 10;
+      this.addButton(c, 16, belowY, 100, 46, '⌫ DEL', 'ghost', function () { this.st.ren.buf.pop(); this.forceDraw = true; });
+      this.addButton(c, 130, belowY, 100, 46, 'CANCEL', 'ghost', function () { this.setState(this.st.ren.from); });
+      this.addButton(c, 244, belowY, 100, 46, 'SAVE', 'primary', this.commitRen);
+    },
+
+    drawStorageDel: function (c) {
+      var d = this.st.del;
+      if (!d) { this.setState('storage'); return; }
+      centerText(c, 'Delete file?', 260, '700 20px ' + FONT, FG);
+      centerText(c, d.path.split('/').pop(), 292, '500 14px ' + FONT, SUB);
+      centerText(c, 'This cannot be undone.', 320, '500 13px ' + FONT, SUB);
+      this.addButton(c, 40, 380, 280, 52, 'DELETE', 'danger', this.commitDel);
+      this.addButton(c, 40, 448, 280, 52, 'CANCEL', 'ghost', function () { this.setState(this.st.del.from); });
     },
 
     drawVolume: function (c) {

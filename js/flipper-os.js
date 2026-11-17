@@ -185,6 +185,7 @@
     menuFrom: 'home',
     savedPath: '',
     savedT0: 0,
+    findT0: -1e9,   /* Stage 4: find-my-Flipper flash start time */
     fm: {
       path: '/ext', sel: 0, scroll: 0,
       viewPath: null, viewLines: [], viewScroll: 0, viewImg: null, viewIsImg: false,
@@ -254,16 +255,58 @@
         },
         'system.ping': function (p, reply) {
           reply(null, { t: (p && p.t) || 0 });
+        },
+
+        /* ---------- Stage 4: phone Storage screen over RPC ---------- */
+        'fs.list': function (p, reply) {
+          if (!FZ.fs) { reply('fs unavailable', null); return; }
+          var path = FZ.fs.normalize(p && p.path);
+          reply(null, { path: path, entries: FZ.fs.list(path) });
+        },
+        'fs.read': function (p, reply) {
+          if (!FZ.fs) { reply('fs unavailable', null); return; }
+          var path = FZ.fs.normalize(p && p.path);
+          var data = FZ.fs.read(path);
+          if (data === null) { reply('not found', null); return; }
+          reply(null, { path: path, data: data });
+        },
+        'fs.rename': function (p, reply) {
+          if (!FZ.fs) { reply('fs unavailable', null); return; }
+          var path = FZ.fs.rename(p && p.path, p && p.name);
+          if (!path) { reply('rename failed', null); return; }
+          reply(null, { path: path });
+        },
+        'fs.remove': function (p, reply) {
+          if (!FZ.fs) { reply('fs unavailable', null); return; }
+          var path = FZ.fs.remove(p && p.path);
+          if (!path) { reply('remove failed', null); return; }
+          reply(null, { path: path });
+        },
+        'fs.stats': function (p, reply) {
+          if (!FZ.fs) { reply('fs unavailable', null); return; }
+          reply(null, FZ.fs.stats());
+        },
+
+        /* ---------- Stage 4: find-my-Flipper ---------- */
+        'find.flipper': function (p, reply) {
+          self.findT0 = FZ.util.now();
+          self.dirty();
+          FZ.audio.alarm();
+          reply(null, { ok: true });
         }
       });
 
-      /* redraw the file UI if the SD card changes underneath it
-         (Stage 4: remote ops arrive over the link bus) */
+      /* redraw the file UI if the SD card changes underneath it, and tell
+         the phone so its Storage screen can refresh within ~1 s (Stage 4).
+         Every mutation — whether it came from the on-device file manager or
+         from a phone RPC handler above — flows through FZ.fs, so this one
+         subscription is the single sync point for both UIs. */
       if (FZ.fs) {
-        FZ.fs.subscribe(function () {
+        FZ.fs.subscribe(function (op) {
           var s = self.state;
           if (s === 'fm' || s === 'fmview' || s === 'fmact' ||
               s === 'fmren' || s === 'fmdel' || s === 'storage') self.dirty();
+          FZ.link.event('flipper', 'fs.changed', { op: op });
         });
       }
 
@@ -533,6 +576,7 @@
         this.menuSel = 0;
         this.dirtyFlag = true;
       }
+      if (now - this.findT0 < 3000) this.dirtyFlag = true; /* keep the find-me flash animating */
       if (this.dirtyFlag) { this.draw(now); this.dirtyFlag = false; }
     },
 
@@ -541,6 +585,22 @@
       var s = this.screen;
       if (!s) return;
       var c = s.begin();
+
+      /* find-my-Flipper: a few seconds of inverted flashing LCD, overriding
+         whatever screen is currently shown (Stage 4) */
+      var findAge = now - this.findT0;
+      if (findAge < 3000) {
+        var on = Math.floor(findAge / 220) % 2 === 0;
+        var txtColor = on ? BG : FG;
+        c.fillStyle = on ? FG : BG;
+        c.fillRect(0, 0, 128, 64);
+        drawTextC(c, 'FIND MY', 20, txtColor, 2);
+        drawTextC(c, 'FLIPPER', 38, txtColor, 2);
+        drawTextC(c, 'HERE I AM', 56, txtColor);
+        s.markDirty();
+        return;
+      }
+
       c.fillStyle = BG;
       c.fillRect(0, 0, 128, 64);
 
@@ -704,6 +764,7 @@
 
     drawFmView: function (c) {
       var f = this.fm;
+      if (!f.viewPath) { drawTextC(c, 'NO FILE OPEN', 32); return; }
       drawText(c, trunc(f.viewPath.split('/').pop(), 18), 4, 11);
       if (f.viewIsImg) {
         drawTextR(c, 'IMG', 124, 11);

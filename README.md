@@ -9,11 +9,11 @@ link (an in-page RPC bus).
 **Simulation only.** No real radio, NFC, USB or firmware anywhere. Not
 affiliated with Flipper Devices.
 
-> Status: **Stage 3** — everything in Stage 2 plus a **virtual SD card**
-> (`js/flipper-fs.js`) and an on-device **menu / file manager** on the
-> Flipper's LCD: browse folders, view text/image files, rename, delete, take
-> an LCD screenshot, and check storage usage. All content is original and
-> invented; nothing is read from or written to a real filesystem.
+> Status: **Stage 4** — everything in Stage 3 plus a **phone Storage screen**
+> that mirrors the virtual SD card entirely over the simulated RPC bus
+> (`fs.list` / `fs.read` / `fs.rename` / `fs.remove`), a push `fs.changed`
+> event so edits made on either device show up on the other within about a
+> second, and a **Find My Flipper** button that flashes the Flipper's LCD.
 
 ## Self-contained: zero external dependencies
 
@@ -90,11 +90,34 @@ OPTIONAL section).
   - **STORAGE** — shows used/free space (out of a simulated 128 MB card) and
     file/folder counts.
 
+### Phone Storage screen & Find My Flipper (Stage 4, shipped)
+
+- The phone **never** touches `js/flipper-fs.js` directly. Every list / read /
+  rename / delete goes out as an RPC over `link.js` (`fs.list`, `fs.read`,
+  `fs.rename`, `fs.remove`, handled on the Flipper side in `flipper-os.js`,
+  which is the only code that calls into `FZ.fs`). This keeps the "single
+  source of truth lives on the Flipper" rule intact even though both UIs
+  happen to run in the same page.
+- On the phone's **Connected** screen, tap **OPEN STORAGE** to browse the
+  same `/ext` tree as the Flipper's file manager: folders and files, sizes,
+  pagination for long folders, a **‹ UP** button, and a **⋯** action menu per
+  row (Rename / Delete). Opening a file shows its text (scrollable) or, for
+  screenshots, the decoded image. Renaming uses an on-screen lowercase
+  keyboard (tap letters, ⌫ to delete, no mid-string cursor — a deliberate
+  touch-friendly simplification vs. the Flipper's D-pad character-cycle
+  editor); deleting asks for confirmation.
+- **Sync**: every mutation anywhere (Flipper file manager *or* a phone RPC)
+  fires one `fs.changed` event over the link bus (30–120 ms simulated
+  latency). The phone's Storage screen listens for it and silently
+  re-fetches whatever it's currently showing, and the Flipper's own file
+  manager re-draws the same way — both comfortably inside the ~1 s budget.
+- **Find My Flipper**: tapping the button on the phone's Connected screen
+  sends a `find.flipper` RPC; the Flipper plays an alert tone and flashes its
+  entire LCD "FIND MY FLIPPER / HERE I AM" (inverted, ~4.5 Hz) for 3 seconds,
+  then returns to whatever screen it was on.
+
 ### Later stages
 
-- **S4 — phone Storage screen**: mirror the virtual SD card on the phone over
-  RPC, push `fs.changed` events so rename/capture/delete sync within ~1 s, and
-  a "find my Flipper" flash — not yet added.
 - **S5 — Bad USB (UI-only)**: line-by-line playback of benign demo scripts on
   the Flipper screen; never injects into the host OS — not yet added.
 - **S6 — polish & self-test**: `FZ.selfTest()`, final README pass, perf tuning
@@ -113,6 +136,8 @@ OPTIONAL section).
 | OK on the Flipper home screen | Open the menu (File Manager / Screenshot / Storage) |
 | In the file manager | ↑↓ move, OK open/view, → actions, ← up a folder, Back exit |
 | Tap phone screen | Use the companion app |
+| Phone "Open Storage" (while connected) | Browse the same SD card over RPC, rename/delete, view files |
+| Phone "Find My Flipper" (while connected) | Flashes the Flipper's LCD for ~3 s |
 | Phone side buttons | Power = sleep/wake screen, volume = app volume |
 | Top bar | Layout toggle, Models, Help, Sound, Reset storage, Link debug |
 
