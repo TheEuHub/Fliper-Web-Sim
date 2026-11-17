@@ -1,6 +1,10 @@
 /* Fliper Web Sim — flipper-os: JS re-implementation of the Flipper OS shell
    for a 128×64 monochrome LCD with orange backlight (#FF8200 on #1A0F00).
-   All code and glyphs original. Stage 1: boot, home, pairing, link status.
+   All code and glyphs original.
+   Stage 1: boot, home, pairing, link status.
+   Stage 3: main menu (OK from home/connected) with FILE MANAGER over the
+   virtual SD card (js/flipper-fs.js): browse, view text/images, rename,
+   delete, LCD screenshot capture, storage info.
    Flipper state lives HERE (single source of truth). The phone talks to it
    only through the RPC bus in link.js. */
 (function () {
@@ -130,6 +134,36 @@
 
   var KEY_LABEL = { up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT', ok: 'OK', back: 'BACK' };
 
+  /* ---------- file-manager helpers (Stage 3) ---------- */
+  /* charset for the rename editor; '\b' is the delete-char sentinel,
+     displayed as '<' (the font is uppercase-only and has no backspace
+     glyph — drawText() uppercases everything anyway). */
+  var CHARSET = 'abcdefghijklmnopqrstuvwxyz0123456789_-().'.split('').concat(['\b']);
+  var ALPHA = 'abcdefghijklmnopqrstuvwxyz0123456789_-().'.split('');
+
+  function dispChar(ch) { return ch === '\b' ? '<' : ch; }
+
+  function cycle(arr, cur, delta) {
+    var i = arr.indexOf(cur);
+    if (i < 0) return arr[delta > 0 ? 0 : arr.length - 1];
+    return arr[(i + delta + arr.length) % arr.length];
+  }
+
+  function drawTextR(c, str, xRight, y, color, scale) {
+    drawText(c, str, xRight - textWidth(str, scale || 1), y, color, scale);
+  }
+
+  function fmtSize(n) {
+    if (n < 1000) return String(n);
+    if (n < 1000000) return (n / 1000).toFixed(1) + 'K';
+    return (n / 1000000).toFixed(1) + 'M';
+  }
+
+  function trunc(s, max) {
+    s = String(s);
+    return s.length > max ? s.slice(0, max - 1) + '.' : s;
+  }
+
   /* ---------- the OS object ---------- */
   var os = {
     screen: null,
@@ -145,6 +179,19 @@
     signal: 0,
     connected: false,
     dirtyFlag: true,
+
+    /* menu + file manager (Stage 3) */
+    menuSel: 0,
+    menuFrom: 'home',
+    savedPath: '',
+    savedT0: 0,
+    fm: {
+      path: '/ext', sel: 0, scroll: 0,
+      viewPath: null, viewLines: [], viewScroll: 0, viewImg: null, viewIsImg: false,
+      act: null,   /* {path, dir, from, sel} */
+      ren: null,   /* {path, buf[], cur, ins, from} */
+      del: null    /* {path, from} */
+    },
 
     dirty: function () { this.dirtyFlag = true; if (this.screen) this.screen.markDirty(); },
 
@@ -197,17 +244,28 @@
           self.dirty();
         },
         'system.info': function (p, reply) {
+          var used = 41.3 + (FZ.fs ? FZ.fs.usedMB() : 0);
           reply(null, {
             name: self.name,
             battery: self.battery,
             firmware: self.firmware,
-            storage: { usedMB: 41.3, totalMB: 128 }
+            storage: { usedMB: Math.round(used * 10) / 10, totalMB: 128 }
           });
         },
         'system.ping': function (p, reply) {
           reply(null, { t: (p && p.t) || 0 });
         }
       });
+
+      /* redraw the file UI if the SD card changes underneath it
+         (Stage 4: remote ops arrive over the link bus) */
+      if (FZ.fs) {
+        FZ.fs.subscribe(function () {
+          var s = self.state;
+          if (s === 'fm' || s === 'fmview' || s === 'fmact' ||
+              s === 'fmren' || s === 'fmdel' || s === 'storage') self.dirty();
+        });
+      }
 
       FZ.audio.boot();
     },
@@ -238,7 +296,226 @@
         return;
       }
       this.lastKey = KEY_LABEL[k] || String(k).toUpperCase();
+
+      /* OK from home/connected opens the main menu (Stage 3) */
+      if ((this.state === 'home' || this.state === 'connected') && k === 'ok') {
+        this.menuFrom = this.state;
+        this.menuSel = 0;
+        this.state = 'menu';
+        this.dirty();
+        return;
+      }
+
+      switch (this.state) {
+        case 'menu': this.keyMenu(k); break;
+        case 'fm': this.keyFm(k); break;
+        case 'fmview': this.keyFmView(k); break;
+        case 'fmact': this.keyFmAct(k); break;
+        case 'fmren': this.keyFmRen(k); break;
+        case 'fmdel': this.keyFmDel(k); break;
+        case 'fmsaved': this.state = 'menu'; this.menuSel = 0; break;
+        case 'storage': if (k === 'back') { this.state = 'menu'; } break;
+        default: break;
+      }
       this.dirty();
+    },
+
+    /* ---------- menu / file-manager input (Stage 3) ---------- */
+    keyMenu: function (k) {
+      if (k === 'up') this.menuSel = (this.menuSel + 2) % 3;
+      else if (k === 'down') this.menuSel = (this.menuSel + 1) % 3;
+      else if (k === 'back') this.state = this.menuFrom;
+      else if (k === 'ok') {
+        if (this.menuSel === 0) { this.openFm('/ext'); this.state = 'fm'; }
+        else if (this.menuSel === 1) this.capture();
+        else this.state = 'storage';
+      }
+    },
+
+    openFm: function (path) {
+      this.fm.path = path;
+      this.fm.sel = 0;
+      this.fm.scroll = 0;
+    },
+
+    fmList: function () {
+      return (FZ.fs ? FZ.fs.list(this.fm.path) : []);
+    },
+
+    fmClamp: function () {
+      var f = this.fm;
+      var n = this.fmList().length;
+      if (f.sel >= n) f.sel = Math.max(0, n - 1);
+      if (f.sel < 0) f.sel = 0;
+      if (f.sel < f.scroll) f.scroll = f.sel;
+      if (f.sel > f.scroll + 5) f.scroll = f.sel - 5;
+      if (f.scroll < 0) f.scroll = 0;
+      if (f.scroll > Math.max(0, n - 6)) f.scroll = Math.max(0, n - 6);
+    },
+
+    fmUp: function () {
+      if (this.fm.path === '/ext' || this.fm.path === '/') return;
+      var p = this.fm.path.split('/');
+      p.pop();
+      this.openFm(p.join('/') || '/ext');
+    },
+
+    keyFm: function (k) {
+      var list = this.fmList();
+      var n = list.length;
+      if (k === 'up') { if (this.fm.sel > 0) this.fm.sel--; }
+      else if (k === 'down') { if (this.fm.sel < n - 1) this.fm.sel++; }
+      else if (k === 'ok') {
+        var e = list[this.fm.sel];
+        if (!e) return;
+        if (e.dir) this.openFm(e.path);
+        else this.openView(e.path);
+      } else if (k === 'right') {
+        var e2 = list[this.fm.sel];
+        if (e2) {
+          this.fm.act = { path: e2.path, dir: e2.dir, from: 'fm', sel: 0 };
+          this.state = 'fmact';
+        }
+      } else if (k === 'left') {
+        this.fmUp();
+      } else if (k === 'back') {
+        if (this.fm.path !== '/ext') this.fmUp();
+        else { this.state = 'menu'; this.menuSel = 0; }
+      }
+      this.fmClamp();
+    },
+
+    openView: function (path) {
+      var data = FZ.fs ? FZ.fs.read(path) : null;
+      var f = this.fm;
+      f.viewPath = path;
+      f.viewScroll = 0;
+      f.viewImg = null;
+      f.viewIsImg = !!(data && String(data).indexOf('data:image/') === 0);
+      f.viewLines = data === null ? ['(UNREADABLE)'] : String(data).split('\n');
+      if (f.viewIsImg && typeof Image !== 'undefined') {
+        var self = this;
+        var img = new Image();
+        img.onload = function () { self.fm.viewImg = img; self.dirty(); };
+        img.src = String(data);
+      }
+      this.state = 'fmview';
+    },
+
+    keyFmView: function (k) {
+      var f = this.fm;
+      if (k === 'up' && !f.viewIsImg) {
+        if (f.viewScroll > 0) f.viewScroll--;
+      } else if (k === 'down' && !f.viewIsImg) {
+        if (f.viewScroll < Math.max(0, f.viewLines.length - 6)) f.viewScroll++;
+      } else if (k === 'ok') {
+        f.act = { path: f.viewPath, dir: false, from: 'fmview', sel: 0 };
+        this.state = 'fmact';
+      } else if (k === 'back') {
+        this.state = 'fm';
+      }
+    },
+
+    keyFmAct: function (k) {
+      var a = this.fm.act;
+      if (!a) { this.state = 'fm'; return; }
+      if (k === 'up') a.sel = (a.sel + 2) % 3;
+      else if (k === 'down') a.sel = (a.sel + 1) % 3;
+      else if (k === 'back') this.state = a.from;
+      else if (k === 'ok') {
+        if (a.sel === 0) this.startRen(a);
+        else if (a.sel === 1) { this.fm.del = { path: a.path, from: a.from }; this.state = 'fmdel'; }
+        else this.state = a.from;
+      }
+    },
+
+    startRen: function (a) {
+      /* The editor's charset is lowercase-only (a-z0-9_-().); names are
+         lowercased on entry so the U/D cycle always starts from a known
+         position. Display is uppercase regardless (font has no lowercase
+         glyphs), so this is invisible on the LCD. */
+      var name = a.path.split('/').pop().toLowerCase();
+      this.fm.ren = { path: a.path, buf: name.split(''), cur: 0, ins: 'a', from: a.from };
+      this.state = 'fmren';
+    },
+
+    keyFmRen: function (k) {
+      var r = this.fm.ren;
+      if (!r) { this.state = 'fm'; return; }
+      if (k === 'left') { if (r.cur > 0) r.cur--; }
+      else if (k === 'right') { if (r.cur < r.buf.length) r.cur++; }
+      else if (k === 'up' || k === 'down') {
+        var d = k === 'up' ? 1 : -1;
+        if (r.cur < r.buf.length) r.buf[r.cur] = cycle(CHARSET, r.buf[r.cur], d);
+        else r.ins = cycle(ALPHA, r.ins, d);
+      } else if (k === 'back') {
+        this.state = r.from;
+      } else if (k === 'ok') {
+        if (r.cur < r.buf.length) {
+          if (r.buf[r.cur] === '\b') {
+            r.buf.splice(r.cur, 1);
+            if (r.cur > r.buf.length) r.cur = r.buf.length;
+            FZ.audio.click();
+          } else {
+            this.commitRen();
+          }
+        } else {
+          if (r.buf.length >= 18) { FZ.audio.err(); return; }
+          r.buf.push(r.ins);
+          r.cur = r.buf.length - 1;
+          FZ.audio.click();
+        }
+      }
+    },
+
+    commitRen: function () {
+      var r = this.fm.ren;
+      var name = r.buf.join('');
+      var newPath = FZ.fs ? FZ.fs.rename(r.path, name) : null;
+      if (!newPath) { FZ.audio.err(); return; }
+      FZ.audio.ok();
+      if (r.from === 'fmview') {
+        this.openView(newPath);
+        this.state = 'fmview';
+      } else {
+        this.state = 'fm';
+        var list = this.fmList();
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].path === newPath) { this.fm.sel = i; break; }
+        }
+        this.fmClamp();
+      }
+    },
+
+    keyFmDel: function (k) {
+      var d = this.fm.del;
+      if (!d) { this.state = 'fm'; return; }
+      if (k === 'back') { this.state = d.from; return; }
+      if (k === 'ok') {
+        var ok = FZ.fs ? FZ.fs.remove(d.path) : null;
+        this.state = d.from;
+        if (!ok) FZ.audio.err();
+        else FZ.audio.beep(330, 0.08, 0.08);
+        if (d.from === 'fm') this.fmClamp();
+      }
+    },
+
+    capture: function () {
+      var s = this.screen;
+      var url = '';
+      try { url = s.canvas.toDataURL('image/png'); } catch (e) { url = ''; }
+      if (!url) { FZ.audio.err(); this.state = 'menu'; return; }
+      var d = new Date();
+      var name = 'lcd-' + d.getFullYear() +
+        FZ.util.pad2(d.getMonth() + 1) + FZ.util.pad2(d.getDate()) +
+        '-' + FZ.util.pad2(d.getHours()) + FZ.util.pad2(d.getMinutes()) +
+        FZ.util.pad2(d.getSeconds()) + '.png';
+      var path = FZ.fs ? FZ.fs.write('/ext/screenshots/' + name, url) : null;
+      if (!path) { FZ.audio.err(); this.state = 'menu'; return; }
+      this.savedPath = path;
+      this.savedT0 = FZ.util.now();
+      this.state = 'fmsaved';
+      FZ.audio.ok();
     },
 
     /* ---------- per-frame ---------- */
@@ -250,6 +527,11 @@
       if (this.state === 'scan') {
         this.dirtyFlag = true; /* animated dots */
         if (now - this.scanT0 > 6000) { this.state = 'home'; }
+      }
+      if (this.state === 'fmsaved' && now - this.savedT0 > 2500) {
+        this.state = 'menu';
+        this.menuSel = 0;
+        this.dirtyFlag = true;
       }
       if (this.dirtyFlag) { this.draw(now); this.dirtyFlag = false; }
     },
@@ -271,6 +553,14 @@
           case 'pair': this.drawPair(c); break;
           case 'waitconfirm': this.drawWait(c); break;
           case 'connected': this.drawConnected(c); break;
+          case 'menu': this.drawMenu(c); break;
+          case 'fm': this.drawFm(c); break;
+          case 'fmview': this.drawFmView(c); break;
+          case 'fmact': this.drawFmAct(c); break;
+          case 'fmren': this.drawFmRen(c); break;
+          case 'fmdel': this.drawFmDel(c); break;
+          case 'fmsaved': this.drawSaved(c); break;
+          case 'storage': this.drawStorage(c); break;
           default: this.drawHome(c); break;
         }
       }
@@ -330,7 +620,7 @@
     drawHome: function (c) {
       invBoxC(c, 'FLIPPER SIM', 14);
       drawTextC(c, 'KEY: ' + this.lastKey, 30);
-      drawTextC(c, 'USE PHONE TO PAIR', 42);
+      drawTextC(c, 'OK=MENU PHONE=PAIR', 42);
       drawTextC(c, 'SIMULATION ONLY', 54);
     },
 
@@ -361,8 +651,154 @@
       var nm = this.name.toUpperCase();
       if (nm.length > 14) nm = nm.slice(0, 14);
       drawTextC(c, nm, 30);
-      drawTextC(c, 'RPC SIM LINK', 44);
+      drawTextC(c, 'OK=MENU  RPC SIM', 44);
       drawTextC(c, 'ARCHIVE READY', 56);
+    },
+
+    /* ---------- menu / file-manager rendering (Stage 3) ---------- */
+    drawMenu: function (c) {
+      invBoxC(c, 'MENU', 12);
+      var items = ['FILE MANAGER', 'SCREENSHOT', 'STORAGE'];
+      for (var i = 0; i < items.length; i++) {
+        var y = 24 + i * 10;
+        if (i === this.menuSel) {
+          c.fillStyle = FG;
+          c.fillRect(6, y - 2, 116, 10);
+          drawText(c, items[i], 10, y, BG);
+        } else {
+          drawText(c, items[i], 10, y, FG);
+        }
+      }
+      drawTextC(c, 'OK SELECT BACK HOME', 56);
+    },
+
+    drawFm: function (c) {
+      var list = this.fmList();
+      var n = list.length;
+      var p = this.fm.path;
+      drawText(c, trunc(p, 14), 4, 11);
+      drawTextR(c, n ? (this.fm.sel + 1) + '/' + n : '-', 124, 11);
+      if (!n) {
+        drawTextC(c, 'EMPTY - BACK=UP', 36);
+        return;
+      }
+      for (var i = 0; i < 6; i++) {
+        var idx = this.fm.scroll + i;
+        if (idx >= n) break;
+        var e = list[idx];
+        var y = 19 + i * 7;
+        var nm = e.dir ? e.name + '/' : e.name;
+        nm = trunc(nm, 15);
+        var sz = e.dir ? '' : fmtSize(e.size);
+        if (idx === this.fm.sel) {
+          c.fillStyle = FG;
+          c.fillRect(4, y - 1, 120, 8);
+          drawText(c, nm, 6, y, BG);
+          if (sz) drawTextR(c, sz, 122, y, BG);
+        } else {
+          drawText(c, nm, 6, y, FG);
+          if (sz) drawTextR(c, sz, 122, y, FG);
+        }
+      }
+    },
+
+    drawFmView: function (c) {
+      var f = this.fm;
+      drawText(c, trunc(f.viewPath.split('/').pop(), 18), 4, 11);
+      if (f.viewIsImg) {
+        drawTextR(c, 'IMG', 124, 11);
+        if (f.viewImg) {
+          var iw = f.viewImg.naturalWidth || 256;
+          var ih = f.viewImg.naturalHeight || 128;
+          var sc = Math.min(120 / iw, 42 / ih);
+          var w = Math.max(1, Math.round(iw * sc));
+          var h = Math.max(1, Math.round(ih * sc));
+          try { c.drawImage(f.viewImg, Math.round((128 - w) / 2), 18, w, h); } catch (e) {}
+        } else {
+          drawTextC(c, 'LOADING...', 36);
+        }
+        return;
+      }
+      var lines = f.viewLines;
+      for (var i = 0; i < 6; i++) {
+        var li = f.viewScroll + i;
+        if (li >= lines.length) break;
+        drawText(c, trunc(lines[li], 21), 4, 19 + i * 7);
+      }
+    },
+
+    drawFmAct: function (c) {
+      invBoxC(c, 'ACTIONS', 12);
+      var items = ['RENAME', 'DELETE', 'CANCEL'];
+      var sel = this.fm.act ? this.fm.act.sel : 0;
+      for (var i = 0; i < items.length; i++) {
+        var y = 24 + i * 10;
+        if (i === sel) {
+          c.fillStyle = FG;
+          c.fillRect(16, y - 2, 96, 10);
+          drawText(c, items[i], 22, y, BG);
+        } else {
+          drawText(c, items[i], 22, y, FG);
+        }
+      }
+      drawTextC(c, 'OK SELECT BACK=RET', 56);
+    },
+
+    drawFmRen: function (c) {
+      var r = this.fm.ren;
+      if (!r) return;
+      invBoxC(c, 'RENAME', 12);
+      drawText(c, 'NEW NAME:', 4, 24);
+      var x = 4, i;
+      for (i = 0; i < r.buf.length; i++) {
+        var ch = dispChar(r.buf[i]);
+        if (i === r.cur) {
+          c.fillStyle = FG;
+          c.fillRect(x - 1, 31, 7, 9);
+          drawText(c, ch, x, 32, BG);
+        } else {
+          drawText(c, ch, x, 32, FG);
+        }
+        x += 6;
+      }
+      if (r.cur >= r.buf.length) {
+        c.fillStyle = FG;
+        c.fillRect(x - 1, 31, 7, 9);
+        drawText(c, dispChar(r.ins), x, 32, BG);
+      }
+      drawText(c, 'L/R MOVE U/D CHAR', 4, 44);
+      var hint;
+      if (r.cur < r.buf.length && r.buf[r.cur] === '\b') hint = 'OK=DEL';
+      else if (r.cur >= r.buf.length) hint = 'OK=INS';
+      else hint = 'OK=SAVE';
+      drawText(c, hint, 4, 52);
+      drawTextR(c, 'CANCEL', 124, 52);
+    },
+
+    drawFmDel: function (c) {
+      var d = this.fm.del;
+      if (!d) return;
+      invBoxC(c, 'DELETE?', 12);
+      drawTextC(c, trunc(d.path.split('/').pop(), 20), 30);
+      drawTextC(c, 'CANNOT BE UNDONE', 42);
+      drawTextC(c, 'OK=YES BACK=NO', 56);
+    },
+
+    drawSaved: function (c) {
+      invBoxC(c, 'SAVED TO SD', 14);
+      drawTextC(c, trunc(this.savedPath.split('/').pop(), 20), 32);
+      drawTextC(c, '/EXT/SCREENSHOTS', 44);
+      drawTextC(c, 'OK=MENU', 56);
+    },
+
+    drawStorage: function (c) {
+      invBoxC(c, 'STORAGE', 12);
+      var used = 41.3 + (FZ.fs ? FZ.fs.usedMB() : 0);
+      var st = FZ.fs ? FZ.fs.stats() : { files: 0, dirs: 0 };
+      drawText(c, 'SD CARD (VIRTUAL)', 4, 26);
+      drawText(c, 'USED ' + used.toFixed(1) + ' MB', 4, 36);
+      drawText(c, 'FREE ' + Math.max(0, 128 - used).toFixed(1) + ' MB', 4, 46);
+      drawText(c, 'FILES ' + st.files + ' DIRS ' + st.dirs, 4, 56);
     }
   };
 

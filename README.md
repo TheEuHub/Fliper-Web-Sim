@@ -9,9 +9,11 @@ link (an in-page RPC bus).
 **Simulation only.** No real radio, NFC, USB or firmware anywhere. Not
 affiliated with Flipper Devices.
 
-> Status: **Stage 2** — desk scene with the **official Flipper body** (embedded
-> base64 STL, calibrated screen/buttons), procedural phone, orbit/lift/zoom
-> controls, live canvases, pairing handshake, RF beam.
+> Status: **Stage 3** — everything in Stage 2 plus a **virtual SD card**
+> (`js/flipper-fs.js`) and an on-device **menu / file manager** on the
+> Flipper's LCD: browse folders, view text/image files, rename, delete, take
+> an LCD screenshot, and check storage usage. All content is original and
+> invented; nothing is read from or written to a real filesystem.
 
 ## Self-contained: zero external dependencies
 
@@ -56,10 +58,47 @@ OPTIONAL section).
   (offline, file input only). The "Placeholder block" remains available in
   the Models dropdown as the S1 stand-in.
 
+### Virtual SD card & file manager (Stage 3, shipped)
+
+- `js/flipper-fs.js` is a self-contained virtual filesystem rooted at `/ext`
+  (the Flipper SD-card convention). It persists to `localStorage` under
+  `fz.v1.fs` (try/catch, falls back to in-memory if storage is unavailable)
+  and is seeded on first run with a small original tree: `README.txt`,
+  `apps/games/tictactoe.fap`, `subghz/demo_433.sub`, `nfc/demo.nfc`, an empty
+  `ibtn/` folder, `dolphin/level.txt`, and an empty `screenshots/` folder.
+  Every file's content is invented placeholder text — none of it is real
+  firmware, app, sub-GHz, or NFC data.
+- Every mutation (write / mkdir / remove / rename) is recorded as a small op
+  record and broadcast to subscribers, which is the hook Stage 4 uses to keep
+  the phone's Storage screen in sync with the Flipper within ~1 s.
+- **On the Flipper**, press **OK** from the home or connected screen to open
+  the **menu**:
+  - **FILE MANAGER** — ↑/↓ select, **OK** opens a folder or views a file,
+    **→** opens actions (Rename / Delete / Cancel), **←** goes up one folder,
+    **Back** exits up a level (or to the menu at the SD root).
+  - Viewing a `.txt`-style file shows up to 6 scrollable lines; viewing a
+    screenshot renders the saved PNG scaled to fit the LCD.
+  - **Rename**: ←/→ move the cursor, ↑/↓ cycle the character under the
+    cursor through `a-z 0-9 _ - ( ) .` (plus a delete symbol shown as `<`,
+    and an insert slot past the end of the name); **OK** commits, **Back**
+    cancels. Names are edited in lowercase — the LCD font only has uppercase
+    glyphs, so display is uppercase regardless of the stored case.
+  - **Delete** asks for confirmation (**OK** = delete, **Back** = cancel).
+  - **SCREENSHOT** — captures the current LCD canvas as a PNG data URL and
+    saves it to `/ext/screenshots/lcd-YYYYMMDD-HHMMSS.png`, then shows a
+    confirmation screen for ~2.5 s before returning to the menu.
+  - **STORAGE** — shows used/free space (out of a simulated 128 MB card) and
+    file/folder counts.
+
 ### Later stages
 
-- **S3 — virtual SD card**: `js/flipper-fs.js` (file manager, captures,
-  rename/delete) — not yet added.
+- **S4 — phone Storage screen**: mirror the virtual SD card on the phone over
+  RPC, push `fs.changed` events so rename/capture/delete sync within ~1 s, and
+  a "find my Flipper" flash — not yet added.
+- **S5 — Bad USB (UI-only)**: line-by-line playback of benign demo scripts on
+  the Flipper screen; never injects into the host OS — not yet added.
+- **S6 — polish & self-test**: `FZ.selfTest()`, final README pass, perf tuning
+  — not yet added.
 
 ## Controls
 
@@ -71,6 +110,8 @@ OPTIONAL section).
 | Double-click / double-tap | Reset view |
 | Click Flipper 3D buttons | D-pad / OK / Back drive the OS |
 | ↑ ↓ ← → / Enter / Esc | Keyboard for the Flipper |
+| OK on the Flipper home screen | Open the menu (File Manager / Screenshot / Storage) |
+| In the file manager | ↑↓ move, OK open/view, → actions, ← up a folder, Back exit |
 | Tap phone screen | Use the companion app |
 | Phone side buttons | Power = sleep/wake screen, volume = app volume |
 | Top bar | Layout toggle, Models, Help, Sound, Reset storage, Link debug |
